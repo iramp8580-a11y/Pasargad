@@ -853,6 +853,15 @@ import { connect } from "cloudflare:sockets";
  *       (tlsBogus فقط ۴۴۳ بود) + مقصد غیر-CF در موج اول تنها می‌دود (مسابقه‌ی ناعادلانه ممنوع).
  *       ۲۵۹d-فیکس۲: گامِ ثابتِ i+=WAVE با موجِ اولِ تک‌تایی، hosts[1..2] را برای همیشه قورت می‌داد
  *       (پرشِ اثبات‌شده) → برشِ موج به waveSlices (خالص/گیت‌پذیر) منتقل شد؛ گام = طولِ موجِ مصرفی.
+ *  ۳۰۱) 3.0.1 «گزارشِ میدان» (سه باگ + چهار خواسته؛ موتورِ اتصال دست‌نخورده — هشِ core با 2.7.6 یکسان):
+ *       باگ۱ سهمیه: سقفِ سختِ تعداد در هر سه قالبِ ساب — ریشه: شمارشِ ناقصِ استخر (ویژه‌ها/آینه‌ها/فرگمنت
+ *       بیرونِ حساب بودند) ← سقف روی خروجیِ نهایی حکم می‌کند. باگ۲ شمارنده: IPهای دستی «۰» نشان داده
+ *       می‌شدند ← خطِ زندهٔ «دستی + اسکن‌شده = مجموع». باگ۳ چیپِ پورتِ رادار: ۴۴۳+۲۰۵۳ تیک‌خورده ولی فقط
+ *       ۴۴۳ روشن‌نمایش ← «on» همان شرطِ «checked». + «💾 ذخیرهٔ همهٔ تنظیمات» (هیچ‌چیز تا کلیک اعمال
+ *       نمی‌شود؛ با کلیک، همه با یک POST). + حذف کامل WARP/وایرگارد (UI/تب/API=410/ساب/کلش/سینگ‌باکس/کرون).
+ *       + «🌐 کاندید از گیت‌هاب» (/api/clean-harvest — منبع ایرانی cf-clean-ips؛ ورکر→گیت‌هاب آزاد است،
+ *       بی‌نیاز از worker.devِ فیلترِ ایران؛ تأیید نهایی = رادارِ مرورگری). + منوی کاندیدِ per-ISP و
+ *       fallback‌های ir/all/ip. + «🔍 بررسی IPهای دستی»: پروبِ مرورگری — سالم می‌ماند، خراب/قطع پاک.
  *  ۳۰۰) 3.0.0 (ذره‌بینِ سوم — نسخه‌ی Major: ترنسپورتِ نو + خانواده‌های کانفیگِ نو + حساب‌داریِ سخت‌شده = شایسته‌ی ۳):
  *       M1: مسیرِ XHTTP می‌توانست با مسیرهای خودِ اپ (پنل/sub/tg/doh) یکی شود = خفه‌شدنِ خاموش
  *       (اثبات: «/pasargad» پذیرفته می‌شد) ← گاردِ تداخل با 400 و پیامِ فارسی + برگشتِ تنظیمِ سالم.
@@ -989,7 +998,7 @@ import { connect } from "cloudflare:sockets";
  *  ۲۵۹) WG: Reserved اختیاری در conf (ریشه‌ی tx=0 اپ رسمی) · ProxyIP-check: ۸→۵ · تلگرام پیش‌فرض از مسیر اصلی
  *       (ریشه‌ی «تلگرام بالا نمی‌آید») با کلید tgViaWarp · هشدار حجم کل پنل (tgVolMB — مگابایت، یک‌بار در هر آستانه).
  */
-const VERSION = "3.0.0";
+const VERSION = "3.0.1";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WS_READY = 1;
 const DAY_MS = 86400000;
@@ -1034,7 +1043,6 @@ export default {
       if (!env.DB) return;
       const state = await loadState(env);
       /* ⚡ ۲۴۷: قطع خودکار وایرگاردِ روز-رسیده — مستقل از گیت autoCheck */
-      try { await wgExpireSweep(env, state); } catch {}
       try { await forwardProbeCron(env, state); } catch {} /* ⚡ ۲۷۲-ب: پویشِ دوره‌ایِ فوروار — مستقل از autoCheck */
       const st = state.settings;
       if (!st || st.autoCheck !== true) return;
@@ -1276,10 +1284,8 @@ function defaultSettings() {
     tgReq: 0,
     tgVolMB: 0, /* ⚡ ۲۵۹: هشدار حجم کل پنل (مگابایت — ۰=خاموش) */
     tgVolHit: 0, /* آخرین آستانه‌ای که خبر داده شد — با آستانه‌ی تازه دوباره مسلح می‌شود */
-    tgViaWarp: false, /* ⚡ ۲۵۹: مسیر تلگرام — پیش‌فرض مسیر اصلی */
     tgReqDay: "",
     tgHookOk: false,
-    warpOn: false,
   };
 }
 // ⚡ 2.3.3: کانال رسمی (پورتال مشتری) — برای تغییر، همین یک خط را عوض کنید
@@ -4839,8 +4845,8 @@ async function panelRouter(request, env, url, panel) {
   const host = url.hostname;
 
   if (sub === "/api/state" && request.method === "GET") {
-    const safe = safeSettings(state.settings, cf, await loadWarp(env).catch(() => null));
-    return json({ ok: true, users: state.users.map((u) => publicUser(u, url.origin, state.settings)), settings: safe, warpState: { loaded: !!safe.warpSet }, version: VERSION, hasAdmin: !!state.admin, usage: usageSummary, countries: countryStats(state.settings.nodes) }); // ⚡ 2.2.6 warpState
+    const safe = safeSettings(state.settings, cf, null); /* ⚡ ۳۰۱: WARP حذف */
+    return json({ ok: true, users: state.users.map((u) => publicUser(u, url.origin, state.settings)), settings: safe, warpState: { loaded: false }, /* ⚡ ۳۰۱: WARP حذف */ version: VERSION, hasAdmin: !!state.admin, usage: usageSummary, countries: countryStats(state.settings.nodes) }); // ⚡ 2.2.6 warpState
   }
 
   if (sub === "/api/password" && request.method === "POST") {
@@ -5085,10 +5091,8 @@ async function panelRouter(request, env, url, panel) {
       tgExpDays: body.tgExpDays != null ? Math.min(365, Math.max(0, Math.round(Number(body.tgExpDays) || 0))) : Math.min(365, Math.max(0, Math.round(Number(state.settings.tgExpDays) || 0))),
       tgReq: body.tgReq != null ? Math.min(99000, Math.max(0, Math.round(Number(body.tgReq) || 0))) : Math.min(99000, Math.max(0, Math.round(Number(state.settings.tgReq) || 0))),
       tgVolMB: body.tgVolMB != null ? Math.min(10000000, Math.max(0, Math.round(Number(body.tgVolMB) || 0))) : Math.min(10000000, Math.max(0, Math.round(Number(state.settings.tgVolMB) || 0))), /* ⚡ ۲۵۹ */
-      tgViaWarp: body.tgViaWarp != null ? body.tgViaWarp === true : state.settings.tgViaWarp === true, /* ⚡ ۲۵۹ */
       // توکن عوض شد → وب‌هوک باید دوباره وصل شود
       tgHookOk: body.tgBotToken != null && body.tgBotToken && String(body.tgBotToken) !== prevTgToken ? false : state.settings.tgHookOk === true,
-      warpOn: body.warpOn != null ? !!body.warpOn : state.settings.warpOn === true,
       // ⚡ 2.2.8: پورت‌های TLS اضافه
       altPorts: body.altPorts != null ? !!body.altPorts : state.settings.altPorts === true,
       /* ⚡ ۲۹۰ (2.7.7): IP تمیزِ دستی + دامنه‌های آینه (خود-ترمیم) + پیش‌فرضِ فرگمنت + XHTTP */
@@ -5176,6 +5180,35 @@ async function panelRouter(request, env, url, panel) {
     return json({ ok: true, live: alive, at: Number(state.settings.livePxAt) || 0 });
   }
 
+  /* ⚡ ۳۰۱: استخراجِ سروری از منابع ایرانیِ گیت‌هاب — ورکر→گیت‌هاب آزاد است (مرورگرِ ایران به worker.dev می‌خورد).
+     اینجا فقط «کاندید» جمع می‌شود؛ ورکر اجازه‌ی TCP به لبه‌ی خودش را ندارد (سند رسمی) → تأیید نهایی = رادارِ مرورگری. */
+  if (sub === "/api/clean-harvest" && request.method === "POST") {
+    try {
+      const SOURCES = globalThis.__pxHarvestSources || ["https://raw.githubusercontent.com/vAHiD55555/cf-clean-ips/main/ip.txt"];
+      const hf = globalThis.__pxHarvestFetch || fetch;
+      const got = [];
+      for (const src of SOURCES) {
+        try {
+          const r = await hf(src, { signal: AbortSignal.timeout(9000) });
+          if (!r || !r.ok) continue;
+          const txt = await r.text();
+          for (const line of txt.split(/\r?\n/)) {
+            const m = /^\s*(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?\s*$/.exec(line);
+            if (!m || m[1].split(".").some((o) => Number(o) > 255) || (Number(m[2]) || 443) > 65535) continue;
+            if (!got.some((x) => x.ip === m[1] && x.port === (Number(m[2]) || 443))) got.push({ ip: m[1], port: Number(m[2]) || 443 });
+            if (got.length >= 400) break;
+          }
+        } catch {}
+        if (got.length >= 400) break;
+      }
+      if (!got.length) return json({ ok: false, error: "هیچ منبعی جواب نداد — چند لحظه بعد دوباره تلاش کنید." }, 503);
+      for (let i = got.length - 1; i > 0; i--) { const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1); const t = got[i]; got[i] = got[j]; got[j] = t; }
+      const ips = got.slice(0, 60);
+      state.settings.harvest = { at: Date.now(), ips };
+      await saveState(env, state);
+      return json({ ok: true, count: ips.length, ips });
+    } catch (e) { return json({ ok: false, error: "استخراج ناموفق: " + String((e && e.message) || e).slice(0, 120) }, 503); }
+  }
   if (sub === "/api/scan/apply" && request.method === "POST") {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return json({ ok: false, error: "بدنه‌ی درخواست نامعتبر است." }, 400); /* ⚡ زره 2.4.8: JSON «null» هم گارد — قبلاً body.ips روی null می‌ترکید و زره‌ی سراسری 503 می‌داد */
@@ -5648,8 +5681,9 @@ async function panelRouter(request, env, url, panel) {
   }
   /* ⚡ 2.5.6 (۲۳۸): وایرگارد — حساب WARP مستقل برای هر مشتری (فایل .conf رسمی + QR)؛
      ترافیک WG مستقیم می‌رود (بدون ورکر) = صفر ریسک خطا، ولی مصرفش در پنل شمرده نمی‌شود */
+  /* ⚡ ۳۰۱: وایرگارد به‌کلی حذف شد */
+  if (sub === "/api/wg" || sub.startsWith("/api/wg/")) return json({ ok: false, error: "وایرگارد از نسخه‌ی 3.0.1 به‌کلی حذف شده است." }, 410);
   if (sub === "/api/wg/list" && request.method === "GET") {
-    try { await wgExpireSweep(env, state); } catch {} /* ⚡ ۲۴۷: بازشدن تب هم قطعِ روز-رسیده را اجرا می‌کند */
     const wmap = await wgAccountsMap(env);
     return json({ ok: true, list: state.users.map((u) => { const w = wmap.get(u.id) || null; return { id: u.id, name: u.name, has: !!w, created: w ? Number(w.created) || 0 : 0, cut: !!(w && w.cut), manual: !!(w && w.manual), expireAt: w ? Number(w.expireAt) || 0 : 0 }; }) });
   }
@@ -5732,6 +5766,8 @@ async function panelRouter(request, env, url, panel) {
     return json({ ok: true });
   }
 
+  /* ⚡ ۳۰۱: WARP به‌کلی حذف شد */
+  if (sub === "/api/warp") return json({ ok: false, error: "WARP از نسخه‌ی 3.0.1 به‌کلی حذف شده است." }, 410);
   if (sub === "/api/warp" && request.method === "POST") {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return json({ ok: false, error: "بدنه‌ی درخواست نامعتبر است." }, 400); /* ⚡ زره 2.4.8: JSON «null» هم گارد — قبلاً body.ips روی null می‌ترکید و زره‌ی سراسری 503 می‌داد */
@@ -5802,8 +5838,7 @@ async function panelRouter(request, env, url, panel) {
       const r = await env.DB.prepare("SELECT userId, day, bytes FROM usage").all();
       usageRows = (r && r.results) || [];
     } catch {}
-    let warp = null;
-    try { warp = await loadWarp(env); } catch {}
+    const warp = null; /* ⚡ ۳۰۱: WARP حذف */
     return new Response(
       JSON.stringify(
         {
@@ -5947,7 +5982,7 @@ if (sub === "/api/hosts-check" && request.method === "POST") {
   }
 
   if (sub === "/" || sub === "") {
-    return html(dashboard(state, url.origin, panel, host, usageSummary, cf, await loadWarp(env).catch(() => null)));
+    return html(dashboard(state, url.origin, panel, host, usageSummary, cf, null));
   }
 
   return new Response("Not found", { status: 404 });
@@ -6052,7 +6087,7 @@ function variantPortsFor(limit, settings) {
   /* ⚡ 2.5.4 ریشه‌ی سرریز سهمیه: دامنه‌های وصل‌شده (extras) جزو ثابت‌ها رزرو نمی‌شدند —
      با WARP+پورت‌ها+دامنه، جمع کانفیگ‌های ساب از عددِ سهمیه رد می‌شد (اثبات عددی: limit=3 → ۴).
      حالا extras هم جزو ثابت‌ها است؛ سهمیه = کل کانفیگ‌های ساب، بدون هیچ استثنایی. */
-  const fixed = 1 + ((settings && settings.warpOn === true) ? 1 : 0) + boundExtraHosts(settings).length;
+  const fixed = 1 + boundExtraHosts(settings).length + premiumConfigs(settings, "").filter((c) => !c.frag && c.type !== "xhttp").length; /* ⚡ ۳۰۱: WARP حذف؛ ویژه‌ها شمرده می‌شوند */
   const room = limit > 0 ? Math.max(0, limit - fixed) : CF_TLS_PORTS.length;
   return CF_TLS_PORTS.slice(0, room);
 }
@@ -6072,7 +6107,7 @@ function dedupeNodes(list) {
 }
 // ⚡ 2.2.7: سهمیه = «تعداد کل کانفیگ ساب» — کانفیگ اصلی ورکر (+WARP اگر فعال + واریانت‌های
 // پورت دامنه) جزو عدد شما شمرده می‌شوند؛ هیچ عدد پنهانی وجود ندارد
-function subExtras(settings) { return 1 + ((settings && settings.warpOn === true) ? 1 : 0) + boundExtraHosts(settings).length; } /* ⚡ 2.5.4: دامنه‌های وصل هم «ثابت» شمرده می‌شوند */
+function subExtras(settings) { return 1 + boundExtraHosts(settings).length + premiumConfigs(settings, "").filter((c) => !c.frag && c.type !== "xhttp").length; } /* ⚡ 2.5.4 + ۳۰۱: دامنه‌های وصل و ویژه‌ها هم «ثابت» شمرده می‌شوند؛ WARP حذف */
 function poolTargetFor(state, u) {
   const fixed = subExtras(state.settings) + variantPortsFor(userLimit(u), state.settings).length;
   return Math.max(0, userLimit(u) - fixed);
@@ -6466,18 +6501,18 @@ function publicUser(u, origin, settings) {
 
 // ⚡ 2.2.4a: تعداد واقعی کانفیگ‌های ساب هر کاربر (سهمیه‌دار = استخر خودش) — شمارش صفحه‌ی وضعیت
 function userConfigCount(user, settings) {
-  // ⚡ 2.2.7: نود WARP (وقتی فعال) هم جزو کانفیگ‌های ساب شمرده می‌شود
-  const warpN = settings && settings.warpOn === true ? 1 : 0;
   const extras = boundExtraHosts(settings).length; /* ⚡ 2.5.3: دامنه‌های وصل‌شده هم کانفیگ‌اند */
-  // ⚡ 2.2.5: سهمیه‌ی سخت — کاربر سهمیه‌دار همیشه تعداد استخر خودش را می‌بیند (حتی ۰)
+  const premiumR = premiumConfigs(settings, "").filter((c) => !c.frag && c.type !== "xhttp").length; /* ⚡ ۳۰۱: فقط همه‌جا-رندر در اندازه‌ی استخر */
+  const premiumA = premiumConfigs(settings, "").length; /* تمیزِ دستی/آینه/فرگمنت/XHTTP هم کانفیگ‌اند */
+  // ⚡ 2.2.5 + ۳۰۱: سهمیه‌ی سخت — شمارش هم‌قانون با سقفِ سختِ ساختن‌ها (WARP حذف)
   if (user && userLimit(user) > 0) {
     const variants = variantPortsFor(userLimit(user), settings).length;
-    const poolRoom = Math.max(0, userLimit(user) - 1 - warpN - extras - variants);
+    const poolRoom = Math.max(0, userLimit(user) - 1 - extras - variants - premiumR);
     const poolLen = Math.min(Array.isArray(user.pool) ? user.pool.length : 0, poolRoom);
-    return poolLen + 1 + warpN + variants + extras;
+    return Math.min(userLimit(user), poolLen + 1 + variants + extras + premiumA);
   }
   const nodes = Array.isArray(settings.nodes) && settings.nodes.length ? settings.nodes : parseNodes(settings.extraIPs);
-  return nodes.length + 1 + warpN + (altPortsOn(settings) ? CF_TLS_PORTS.length : 0) + extras; // +۱ = کانفیگ اصلی خود ورکر
+  return nodes.length + 1 + (altPortsOn(settings) ? CF_TLS_PORTS.length : 0) + extras + premiumA; // +۱ = کانفیگ اصلی خود ورکر
 }
 
 // ⚡ وضعیت دقیق کاربر برای صفحه‌ی وضعیت اشتراک
@@ -6612,11 +6647,6 @@ async function subscription(request, env, url) {
     // ⚡ 2.4.2 پچ: صفحه‌ی سفیدِ «اشتراک نامعتبر است» ممنوع — صفحه‌ی طراحی‌شده با راهنما و کانال
     return new Response(subGonePage(), { status: 403, headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" } });
   }
-  // ⚡ 2.2.6: حساب WARP یک بار و قبل از شاخه‌ی وضعیت لود می‌شود — شمارش کانفیگ هم می‌بیند
-  try {
-    const w = await loadWarp(env);
-    if (w) state.settings._warp = w;
-  } catch {}
   const ust = userStatus(user);
   if (ust !== "ok") {
     // ⚡ 2.4.2 پچ: همه‌ی حالت‌ها (حتی خروجی خام اپ‌ها) صفحه‌ی طراحی‌شده می‌گیرند — متن سفید ممنوع
@@ -6626,7 +6656,7 @@ async function subscription(request, env, url) {
   // ⚡ 2.3.0: هیچ خطایی در این لایه نباید ساب را از کار بیندازد
   let effSettings = state.settings;
   try { effSettings = await maybeIspSettings(request, state.settings, user); } catch {}
-  if (state.settings._warp) effSettings._warp = state.settings._warp;
+  /* ⚡ ۳۰۱: _warp دیگر به هیچ ساختی تزریق نمی‌شود — حتی بقایای JSON قدیمی نادیده می‌ماند */
   // ⚡ 2.3.3: مسیر ساب هرگز خطا نمی‌دهد — حتی اگر سازنده‌ای مشکل خورد، حداقل کانفیگ اصلی برمی‌گردد
   let links;
   try {
@@ -6693,12 +6723,12 @@ const ispPoolCache = { at: 0, key: "", ips: [] };
 async function fetchIspIps(base, key) {
   const b = String(base || "").replace(/\/+$/, "");
   if (!b || !key) return [];
-  const files = [key, "ir", "all"];
+  const files = [key, "ir", "all", "ip"]; /* ⚡ ۳۰۱: ip.txt (cf-clean-ips) هم پشتیبانی */
   const out = [];
   for (const f of files) {
     try {
       const c = new AbortController(); const t = setTimeout(() => c.abort(), 5000);
-      const r = await fetch(b + "/" + f + ".txt", { signal: c.signal, cf: { cacheTtl: 600 } });
+      const r = await (globalThis.__pxHarvestFetch || fetch)(b + "/" + f + ".txt", { signal: c.signal, cf: { cacheTtl: 600 } });
       clearTimeout(t);
       if (!r.ok) continue;
       const txt = await r.text();
@@ -6768,8 +6798,7 @@ function extraAddresses(settings, host, user) {
   if (user && userLimit(user) > 0) {
     const lim = userLimit(user);
     const variants = domainVariants(host, settings, lim);
-    const warpN = settings && settings.warpOn === true ? 1 : 0;
-    const poolRoom = Math.max(0, lim - 1 - warpN - extras.length - variants.length);
+    const poolRoom = Math.max(0, lim - 1 - extras.length - variants.length - premiumConfigs(settings, host).filter((c) => !c.frag && c.type !== "xhttp").length); /* ⚡ ۳۰۱: فقط ویژه‌های همه‌جا-رندر در اندازه‌ی استخر؛ فرگمنت/XHTTP فقط در vless می‌آیند و سقفِ سخت حکم می‌کند */ /* ⚡ ۳۰۱: WARP حذف؛ ویژه‌ها شمرده می‌شوند */
     nodes = dedupeNodes([...variants, ...(Array.isArray(user.pool) ? user.pool : []).slice(0, poolRoom)]);
   } else nodes = dedupeNodes([...domainVariants(host, settings, 0), ...nodes]);
   return { hosts, nodes, extras };
@@ -6833,8 +6862,10 @@ function xrayJson(user, host, settings) {
   /* ⚡ ۲۷۰ (هم‌قانون با base64): لبه=IPِ خام + Host=دامنه؛ ترتیبِ لبه‌اول؛ اصلی لبه‌محور */
   const nodesOrdered = nodes.slice().sort((a, b) => (isCfEdgeIp(b.ip) ? 1 : 0) - (isCfEdgeIp(a.ip) ? 1 : 0));
   const mainEdge = nodesOrdered.find((n) => isCfEdgeIp(n.ip) && Number(n.port || 443) === 443) || nodesOrdered.find((n) => isCfEdgeIp(n.ip) && isTlsPort(n.port || 443));
-  const addrs = [{ tag: pxLabelFor(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))];
+  let addrs = [{ tag: pxLabelFor /* ⚡ ۳۰۱ */(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))];
   const tagU = userTag(user); // ⚡ 2.3.2
+  const limZ = userLimit(user); /* ⚡ ۳۰۱ (باگ ۱): سقفِ سخت */
+  if (limZ) addrs = addrs.slice(0, Math.max(1, limZ - (frag ? 1 : 0))); /* فرگمنت هم داخل سقف */
   const outbounds = [];
   if (frag) {
     outbounds.push({
@@ -6862,30 +6893,6 @@ function xrayJson(user, host, settings) {
   const rules = [];
   if (settings.directIran) rules.push({ type: "field", outboundTag: "direct", domain: ["geosite:ir"] }, { type: "field", outboundTag: "direct", ip: ["geoip:ir", "private"] });
   if (settings.blockAds) rules.push({ type: "field", outboundTag: "block", domain: ["geosite:category-ads-all"] });
-  // ⚡ 2.2.6: «☁️ WARP» در خود فرمت Xray JSON (قبلاً فقط sing-box/Clash داشتند —
-  // ریشه‌ی «وارپ اضافه نمی‌شود» برای کاربران v2rayNG/JSON) — شکل رسمی Xray-core v1.8+
-  if (settings._warp && settings.warpOn === true) {
-    const w = settings._warp;
-    outbounds.push({
-      tag: "☁️ WARP",
-      protocol: "wireguard",
-      settings: {
-        secretKey: w.priv,
-        address: [w.v4 || "172.16.0.2/32", w.v6 || "fd01:5ca1:ab1e:80fb::/128"].filter(Boolean),
-        peers: [{ publicKey: w.peer || WARP_PEER_PUB, endpoint: String(w.endpoint || WARP_ENDPOINT), allowedIPs: ["0.0.0.0/0", "::/0"] }],
-        reserved: (w.reserved || []).slice(0, 3),
-        mtu: 1280,
-      },
-    });
-    rules.push({ type: "field", outboundTag: "☁️ WARP", domain: SANCTIONED_DOMAINS.map((d) => "domain:" + d) });
-    /* ⚡ ۲۵۹: تلگرام دیگر به‌حالت پیش‌فرض به WARP قفل نیست — ریشه‌ی «تلگرام بالا نمی‌آید ولی بقیه
-       اپ‌ها اوکی‌اند»: قاعده‌ی تلگرام→WARP روی شبکه‌ای که Handshake وایرگارد نمی‌گیرد = تلگرام مرده.
-       پیش‌فرض: تلگرام مثل بقیه از مسیر اصلی (خروجی ورکر) می‌رود؛ tgViaWarp فقط با انتخاب صریح مدیر. */
-    if (settings.tgViaWarp === true) {
-      rules.push({ type: "field", outboundTag: "☁️ WARP", domain: TELEGRAM_DOMAINS.map((d) => "domain:" + d) });
-      rules.push({ type: "field", outboundTag: "☁️ WARP", ip: TELEGRAM_CIDRS.slice() });
-    }
-  }
   rules.push({ type: "field", port: "0-65535", outboundTag: tags[0] });
   // ⚡ 2.3.1: DNS امن داخل خود فایل — کوئری‌های پورت ۵۳ به ماژول DNS هدایت می‌شوند و
   // خود کوئری ۱.۱.۱.۱ از مسیر کانفیگ اصلی می‌رود (نه از اینترنت اپراتور)؛ ریشه‌ی
@@ -6974,6 +6981,7 @@ function buildVlessLinks(user, host, settings) {
   const { hosts, nodes, extras } = extraAddresses(settings, host, user);
   const fp = String(settings.fingerprint || "chrome").replace(/[^\w-]/g, "") || "chrome"; /* ⚡ 2.5.0: گارد رندر برای state قدیمی */
   const links = [];
+  const limV = userLimit(user); /* ⚡ ۳۰۱ (باگ ۱): سقفِ سخت روی خروجی نهایی — ویژه‌ها/آینه‌ها هم داخل سقف */
   const sni = sniFrontFor(settings, hosts[0]); /* ⚡ 2.5.3: پوشش SNI — فقط نام TLS */
   const hostH = hosts[0]; /* ⚡ 2.5.3: هدر Host = دامنه‌ی خود ورکر (مسیردهی لبه) — با SNI پوششی عوض نمی‌شود */
   const mkPath = (node) => encodeURIComponent(buildWsPath(settings.path, proxyIpForNode(node, settings), userTag(user))); // ⚡ 2.3.2
@@ -6993,6 +7001,7 @@ function buildVlessLinks(user, host, settings) {
     `vless://${user.id}@${mainAddr}:${mainPort}?encryption=none&security=tls&sni=${sni}&fp=${fp}&type=ws&host=${hostH}&path=${mkPath({ ip: host, port: 443 })}#${encodeURIComponent(mainName)}`
   );
   for (const eh of extras) { /* ⚡ 2.5.3: کانفیگ گذر از دامنه‌ی وصل‌شده به ورکر (فقط دامنه‌ی وصل — کانفیگ مرده ممنوع) */
+    if (limV && links.length >= limV) break; /* ⚡ ۳۰۱ */
     links.push(
       `vless://${user.id}@${eh}:443?encryption=none&security=tls&sni=${eh}&fp=${fp}&type=ws&host=${eh}&path=${mkPath({ ip: eh, port: 443 })}#${encodeURIComponent("🌐 " + eh)}`
     );
@@ -7007,6 +7016,7 @@ function buildVlessLinks(user, host, settings) {
      کانفیگِ اصلیِ دامنه‌محور هم برای اپراتورهای بدونِ مشکلِ DNS سرِ جایش می‌ماند. */
   const edgeSeen = new Set();
   for (const n of nodesOrdered) { /* ⚡ ۲۶۴: لبه‌اول — اپ‌ها از بالای لیست وصل می‌شوند */
+    if (limV && links.length >= limV) break; /* ⚡ ۳۰۱ */
     const port = n.port || 443;
     const useEdge = isCfEdgeIp(n.ip) && !edgeSeen.has(n.ip + ":" + port);
     if (useEdge) edgeSeen.add(n.ip + ":" + port);
@@ -7027,6 +7037,7 @@ function buildVlessLinks(user, host, settings) {
   }
   /* ⚡ ۲۹۰ (2.7.7): کانفیگ‌های ویژه — فرگمنتِ واقعی (پارامترِ fragment= — قبلاً فقط اسم بود)، 📡 تمیزِ دستی، 🪞 آینه، ⚡·X (XHTTP) */
   for (const c of premiumConfigs(settings, host)) {
+    if (limV && links.length >= limV) break; /* ⚡ ۳۰۱ */
     try {
       const cHost = c.host || hostH;
       const cSni = c.sni || sni;
@@ -7040,10 +7051,6 @@ function buildVlessLinks(user, host, settings) {
   }
   /* ⚡ ۲۷۷: کانفیگ‌های جدای «🚀 فوروار» حذف شدند (بیرونِ سهمیه = باگِ «۱۰ می‌زنم ۱۳ می‌آید»).
      جانشین: فوروارِ زنده در proxyIpForNode → مسیرِ همه‌ی کانفیگ‌ها به‌خودی‌خود زنده می‌شود. */
-  // ⚡ 2.1.10: خروجی WARP — لینک warp:// (Hiddify/v2rayN) در انتهای اشتراک
-  try {
-    if (settings._warp && settings.warpOn !== false) links.push(warpWarpLink(settings._warp));
-  } catch {}
   return links;
 }
 
@@ -7068,6 +7075,7 @@ function clashYaml(user, host, settings) {
   const proxies = [];
   const names = [];
   const tagU = userTag(user); // ⚡ 2.3.2
+  const limY = userLimit(user); /* ⚡ ۳۰۱ (باگ ۱): سقفِ سخت clash */
   function add(name, server, port, hashIp, ov) { /* ⚡ ۲۹۱: ov = جایگزینِ SNI/Host برای کانفیگ‌های 🪞 آینه */
     name = String(name).replace(/"/g, "");
     names.push(name);
@@ -7100,33 +7108,12 @@ function clashYaml(user, host, settings) {
   for (const n of nodesOrdered) add(uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), isCfEdgeIp(n.ip) ? n.ip : host, n.port, n.ip); /* ⚡ ۲۷۰: لبه=IPِ خام؛ خصوصی=دامنه؛ هش ProxyIP روی IP واقعی */
   /* ⚡ ۲۹۰ (2.7.7): 📡 تمیزِ دستی + 🪞 آینه در clash (ws-محور؛ xhttp/frag فرمتِ clash ندارد — صادقانه) */
   for (const c of premiumConfigs(settings, host)) {
+    if (limY && names.length >= limY) break; /* ⚡ ۳۰۱ */
     if (c.type === "xhttp" || c.frag) continue;
     add(c.name, c.addr, c.port, c.addr, c.host ? { sni: c.sni, host: c.host } : null); /* ⚡ ۲۹۱ فیکسِ B2 */
   }
   const coreNames = names.slice(); // ⚡ 2.2.8: فقط نودهای واقعی (بدون WARP) برای گروه‌های خودکار
-  // ⚡ 2.1.10: «☁️ WARP» در Clash/meta (wireguard)
-  if (settings._warp && settings.warpOn !== false) {
-    const w = settings._warp;
-    const resv = (w.reserved || []).slice(0, 3);
-    proxies.push(`  - name: "☁️ WARP"
-    type: wireguard
-    server: ${String(w.endpoint || WARP_ENDPOINT).split(":")[0]}
-    port: 2408
-    ip: ${String(w.v4 || "172.16.0.2/32").split("/")[0]}
-    private-key: ${w.priv}
-    public-key: ${w.peer || WARP_PEER_PUB}
-    udp: true
-    mtu: 1280${resv.length === 3 ? "\n    reserved: [" + resv.join(", ") + "]" : ""}${w.v6 ? "\n    ipv6: " + String(w.v6).split("/")[0] : ""}`);
-    names.push("☁️ WARP");
-  }
   const rules = [];
-  if (settings._warp && settings.warpOn !== false) {
-    for (const d of SANCTIONED_DOMAINS) rules.push("  - DOMAIN-SUFFIX," + d + ",☁️ WARP");
-  if (settings.tgViaWarp === true) { /* ⚡ ۲۵۹: پیش‌فرض خاموش — تلگرام از مسیر اصلی */
-    for (const d of TELEGRAM_DOMAINS) rules.push("  - DOMAIN-SUFFIX," + d + ",☁️ WARP");
-    for (const c of TELEGRAM_CIDRS) rules.push("  - " + (c.includes(":") ? "IP-CIDR6" : "IP-CIDR") + "," + c + ",☁️ WARP,no-resolve");
-  } /* ⚡ ۲۵۶c: v6 → IP-CIDR6 (سازگاری هسته‌های کلش) */
-  }
   if (settings.directIran) rules.push("  - GEOSITE,ir,DIRECT", "  - GEOIP,IR,DIRECT", "  - DOMAIN-SUFFIX,ir,DIRECT");
   if (settings.blockAds) rules.push("  - GEOSITE,category-ads-all,REJECT");
   rules.unshift("  - AND,((NETWORK,udp),(DST-PORT,443)),REJECT"); /* ⚡ ۲۷۱: بلاکِ QUIC — اول از همه؛ اپ فوراً به TCP برمی‌گردد */
@@ -7207,8 +7194,10 @@ function singboxJson(user, host, settings) {
   /* ⚡ ۲۷۰ (هم‌قانون با base64): لبه=IPِ خام + Host=دامنه؛ ترتیبِ لبه‌اول؛ اصلی لبه‌محور */
   const nodesOrdered = nodes.slice().sort((a, b) => (isCfEdgeIp(b.ip) ? 1 : 0) - (isCfEdgeIp(a.ip) ? 1 : 0));
   const mainEdge = nodesOrdered.find((n) => isCfEdgeIp(n.ip) && Number(n.port || 443) === 443) || nodesOrdered.find((n) => isCfEdgeIp(n.ip) && isTlsPort(n.port || 443));
-  const addrs = [{ tag: pxLabelFor(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))];
+  let addrs = [{ tag: pxLabelFor /* ⚡ ۳۰۱ */(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))];
   const tagU = userTag(user); // ⚡ 2.3.2
+  const limZ = userLimit(user); /* ⚡ ۳۰۱ (باگ ۱): سقفِ سخت */
+  if (limZ) addrs = addrs.slice(0, limZ);
   const outbounds = addrs.map((a) => ({
     type: "vless",
     tag: a.tag,
@@ -7223,6 +7212,7 @@ function singboxJson(user, host, settings) {
   }));
   /* ⚡ ۲۹۰ (2.7.7): 📡 تمیزِ دستی + 🪞 آینه در sing-box (همان قراردادِ ws) */
   for (const c of premiumConfigs(settings, host)) {
+    if (limZ && outbounds.length >= limZ) break; /* ⚡ ۳۰۱ */
     if (c.type === "xhttp" || c.frag) continue;
     outbounds.push({
       type: "vless", tag: c.name, server: c.addr, server_port: c.port, uuid: user.id,
@@ -7233,29 +7223,8 @@ function singboxJson(user, host, settings) {
   }
   const tags = outbounds.map((o) => o.tag);
   const rules = [];
-  const warpReady = !!settings._warp && settings.warpOn !== false;
-  if (warpReady) rules.push({ domain_suffix: SANCTIONED_DOMAINS.slice(), outbound: "☁️ WARP" });
-  if (warpReady && settings.tgViaWarp === true) { rules.push({ domain_suffix: TELEGRAM_DOMAINS.slice(), outbound: "☁️ WARP" }); rules.push({ ip_cidr: TELEGRAM_CIDRS.slice(), outbound: "☁️ WARP" }); } /* ⚡ ۲۵۶b + ۲۵۹: پیش‌فرض خاموش — فقط با انتخاب مدیر */
   if (settings.directIran) rules.push({ geosite: "ir", outbound: "direct" }, { geoip: "ir", outbound: "direct" });
-  // ⚡ 2.1.10: نود «☁️ WARP» (wireguard) — خروجی تمیز کلادفلر برای سرویس‌های سخت‌گیر
-  let warpOut = null;
-  try {
-    if (settings._warp && settings.warpOn !== false) {
-      const w = settings._warp;
-      warpOut = {
-        type: "wireguard",
-        tag: "☁️ WARP",
-        server: String(w.endpoint || WARP_ENDPOINT).split(":")[0],
-        server_port: 2408,
-        local_address: [w.v4 || "172.16.0.2/32", w.v6 || "fd01:5ca1:ab1e::/128"].filter(Boolean),
-        private_key: w.priv,
-        peer_public_key: w.peer || WARP_PEER_PUB,
-        reserved: (w.reserved || []).slice(0, 3),
-        mtu: 1280,
-      };
-    }
-  } catch {}
-  const allTags = warpOut ? [...tags, "☁️ WARP"] : tags;
+  const allTags = tags; /* ⚡ ۳۰۱: WARP حذف */
   // ⚡ 2.2.8: سه‌گانه‌ی اتصال — بهترین (سریع‌ترین) / کم‌تأخیر (واکنش سریع) / پشتیبان (انتخاب دستی
   // به‌ترتیب). مرگ یک نود دیگر برای مشتری محسوس نیست؛ اپ خودش در چند ثانیه سوییچ می‌کند.
   return {
@@ -7269,7 +7238,6 @@ function singboxJson(user, host, settings) {
       { type: "urltest", tag: "♻️ کم‌تأخیر", outbounds: tags, url: "https://www.gstatic.com/generate_204", interval: "1m", tolerance: 20 },
       { type: "selector", tag: "🛟 پشتیبان", outbounds: tags.slice() },
       ...outbounds,
-      ...(warpOut ? [warpOut] : []),
       { type: "direct", tag: "direct" },
       { type: "block", tag: "block" },
     ],
@@ -8562,7 +8530,7 @@ const FALLBACK_PROXYIPS = [
   "193.233.233.188:2053",
   "180.149.44.124:8443"
 ];
-try { globalThis.__pxDebug = { parsePathProxy, connectHosts, connectOrder, waveSlices, isProxySpec, parseNodes, dohUpstream, variantPortsFor, boundExtraHosts, routeGet, routeSet, tlsBogus, buildVlessLinks, relayGarbageHttp, pipeRemoteToWs, wgConfText, parseProxyIPs, proxyIpForNode, proxyPool, splitHostSpec, FALLBACK_PROXYIPS, lookupCountryBatch, geoHeal, quotaText, planNodeRoom, planCandidates, pruneAgedPending, nodeLabel, countryStats, uniqueNodeNames, connectSmart, isCfEdgeIp, sampleV6, pxProbeCH, probeForward, forwardProbeRun, liveAccAdd, liveAccRemove, liveAccSum, liveAccReset, addUsage, readUsage, premiumConfigs, handleXhttp }; } catch {} // ⚡ پچ 2.3.6 // ⚡ 2.3.4 (بعد از تعریف const — ضد TDZ)
+try { globalThis.__pxDebug = { parsePathProxy, connectHosts, connectOrder, waveSlices, isProxySpec, parseNodes, dohUpstream, variantPortsFor, boundExtraHosts, routeGet, routeSet, tlsBogus, buildVlessLinks, relayGarbageHttp, pipeRemoteToWs, wgConfText, parseProxyIPs, proxyIpForNode, proxyPool, splitHostSpec, FALLBACK_PROXYIPS, lookupCountryBatch, geoHeal, quotaText, planNodeRoom, planCandidates, pruneAgedPending, nodeLabel, countryStats, uniqueNodeNames, connectSmart, isCfEdgeIp, sampleV6, pxProbeCH, probeForward, forwardProbeRun, liveAccAdd, liveAccRemove, liveAccSum, liveAccReset, addUsage, readUsage, premiumConfigs, handleXhttp, fetchIspIps }; } catch {} // ⚡ پچ 2.3.6 // ⚡ 2.3.4 (بعد از تعریف const — ضد TDZ)
 const proxyIpCache = { at: 0, ips: [] };
 async function fetchProxyIpList() {
   if (proxyIpCache.at && Date.now() - proxyIpCache.at < 600000) return proxyIpCache.ips;
@@ -9113,8 +9081,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         <button data-tab="settings">⚙️ تنظیمات</button>
         <button data-tab="adv">🧪 فنی</button>
         <button data-tab="tg">🤖 ربات تلگرام</button>
-        <button data-tab="warp">☁️ خروجی WARP</button>
-        <button data-tab="wg" id="nt_wg">🔗 وایرگارد</button>
         <button data-tab="backup">💾 بکاپ و بازیابی</button>
       </nav>
       <div style="margin-top:18px;display:flex;flex-direction:column;gap:8px">
@@ -9194,6 +9160,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
           <div class="fg"><label>تعداد تست کل (۴۰-۳۰۰)</label><input id="sc" type="number" min="40" max="300" value="150"></div>
           <div class="fg"><label>بهترین‌ها (۱۰-۴۰)</label><input id="sk" type="number" min="10" max="40" value="30"></div>
           <button class="btn btn-c" id="srun" type="button">شروع رادار (تأیید از مرورگر شما)</button>
+          <button class="btn" id="hvs" type="button">🌐 کاندید از گیت‌هاب (سروری)</button>
         </div>
         <div class="bar" id="sbar"><i id="sbarf"></i></div>
         <div class="sub" id="smsg" style="min-height:18px;margin-top:6px"></div>
@@ -9251,7 +9218,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         <div class="row" style="margin-top:12px">
           <label class="check"><input type="checkbox" id="fr"> فرگمنت</label>
           <label class="check"><input type="checkbox" id="ap_on"> پورت‌های اضافه (2053/2083/2087/2096)</label>
-          <button class="btn btn-g" type="button" id="savebtn2">ذخیره تنظیمات فنی</button>
+          <button class="btn btn-g" type="button" id="saveall" style="background:var(--gold2)">💾 ذخیرهٔ همهٔ تنظیمات</button> <button class="btn btn-g" type="button" id="savebtn2">ذخیره تنظیمات فنی</button>
           <button class="btn btn-c" type="button" id="hcheck">🔍 بررسی دامنه‌ها (از کلادفلر رد می‌شود؟)</button>
         </div>
         <div id="hres" style="margin-top:8px"></div>
@@ -9260,6 +9227,9 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         <p class="hint"><b>این چه کاری می‌کند؟</b> هر خط یک IP سالم لبه است. ⚡ وقتی این لیست پر باشد، هر کانفیگ ساب یک ProxyIP اختصاصیِ خودش را در مسیر (path) می‌برد — سایت‌هایی که سخت‌گیرانه میزبان‌شان را می‌بندند (مثل هوش مصنوعی‌ها) برای همه‌ی برنامه‌ها حتی V2Box/v2rayNG هم باز می‌شوند؛ عوض‌کردن لیست، پس از به‌روزرسانی ساب اعمال می‌شود و لیست پنل هم همیشه به‌عنوان پشتیبانِ فوری امتحان می‌شود. اگر مسیر مستقیم قطع شود، اتصال خودکار از این IPها رد می‌شود. لازم نیست دستی بنویسید — دکمه‌ی «پیشنهاد خودکار» بهترین‌ها را پیدا و اضافه می‌کند.</p>
         <div class="fg" style="margin-top:8px"><label>لیست ProxyIP (هر خط یکی)</label><textarea id="px" class="ltr" placeholder="104.16.132.229"></textarea></div>
         <div class="fg" style="margin-top:8px"><label>IPهای تمیزِ دستی (هر خط یکی — IP یا IP:پورت) ⚡۲۹۰</label><textarea id="ci" class="ltr" placeholder="104.17.147.22:443"></textarea><p class="hint">این‌ها به‌عنوان کانفیگِ 📡 به ساب اضافه می‌شوند — برای اپراتورهایی که IPهای فعلی را اذیت می‌کنند.</p></div>
+        <div class="fg"><label>منابعِ کاندید (ایرانی — کلیک = پر شدن خودکار)</label><select id="ispcand"><option value="">— انتخاب کن —</option><option value="https://raw.githubusercontent.com/vAHiD55555/cf-clean-ips/main">همگانی: cf-clean-ips (GitHub — هر ۳ ساعت آپدیت)</option><option value="__custom">کاستوم (آدرسِ خودم)</option></select><p class="hint">⚡۳۰۱: per-ISP واقعی به مخزنی نیاز دارد که فایل‌های mci/mtn/rightel/… بدهد؛ «همگانی» برای همهٔ اپراتورها همان لیستِ به‌روز را می‌دهد (ترتیبِ خواندن: مخزن/key.txt سپس ir/all/ip.txt).</p></div>
+        <div class="fg"><div id="cicount" class="hint" style="color:var(--gold2)">—</div><p class="hint">⚡۳۰۱: شمارنده حالا IPهای دستی را هم حساب می‌کند (باگ ۲).</p></div>
+        <div class="fg"><button class="btn btn-c" type="button" id="cichk">🔍 بررسی IPهای دستی (از مرورگر شما)</button><div id="cires" class="hint" style="margin-top:6px"></div><p class="hint">سالم می‌ماند؛ خراب/قطع خودکار پاک می‌شود — بعدش «💾 ذخیرهٔ همهٔ تنظیمات» را بزن. تأیید از مرورگرِ شماست (همان شبکهٔ مشتری‌ها — ورکر اجازه‌ی TCP به لبه ندارد).</p></div>
         <div class="fg" style="margin-top:8px"><label>دامنه‌های آینه — خود-ترمیم (هر خط یکی) ⚡۲۹۰</label><textarea id="mh" class="ltr" placeholder="panel2.workers.dev"></textarea><p class="hint">اگر روزی اکانتِ اصلی بن شد، مشتری روی کانفیگِ 🪞 می‌ماند (شرط: کاربر با همان UUID در پنلِ دوم هم ثبت شده باشد). لینکِ ساب عوض نمی‌شود!</p></div>
         <div class="fg"><label>پیش‌فرضِ فرگمنت</label><select id="frp"><option value="std">tlshello (استاندارد)</option><option value="p11">۱-۱ (ISPهای سخت‌گیر)</option><option value="both">هر دو (توصیه)</option></select><p class="hint">اکتبر۲۰۲۶: tlshello روی بعضی اپراتورهای ایران مرده — گزینه‌ی ۱-۱ را هم در ساب بگذار.</p></div>
         <label class="check"><input type="checkbox" id="xh_on"> ترنسپورتِ XHTTP (کانفیگِ ⚡·X در ساب — کنارِ WSِ فعلی)</label>
@@ -9302,7 +9272,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         </div>
         <div class="row" style="margin-top:10px">
           <label class="check"><input type="checkbox" id="tg_on"> هشدارهای تلگرام فعال باشد</label>
-          <label class="check"><input type="checkbox" id="tgwarp"> تلگرام از خروجی WARP برود (فقط اگر WARP روی شبکه‌ات Handshake بگیرد؛ پیش‌فرض خاموش = مثل بقیه اپ‌ها از مسیر اصلی)</label>
         </div>
         <p class="hint" style="margin-top:8px">مثال: درصد ۵۰ یعنی وقتی مشتری نصف حجمش تمام شد خبر می‌دهید؛ «روز مانده ۳» یعنی سه روز قبل از پایان اشتراک هر کس یادآوری می‌گیرید؛ درخواست‌ها ۹۰۰۰۰ یعنی اگر مصرف سرویس ابری به ۹۰ هزار رسید هشدار می‌آید. برای هر مشتری فقط یک‌بار خبر می‌دهد (بعد از افزایش حجم یا تمدید، دوباره فعال می‌شود).</p>
         <div class="row" style="margin-top:10px">
@@ -9316,45 +9285,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
       </div>
     </section>
 
-    <section class="tab" id="tab-warp">
-      <div class="card"><h3>☁️ خروجی WARP <span class="sub">خروجی تمیز برای همه‌ی مشتری‌ها</span></h3>
-        <p class="hint">سایت‌های حساس (AI و تحریمی) با WARP از خروجی تمیز می‌روند.</p>
-        <div id="warpsteps"></div>
-        <div class="row" style="margin-top:12px">
-          <label class="check"><input type="checkbox" id="warp_on"> نمایش نود WARP در اشتراک مشتری‌ها</label>
-          <button class="btn btn-g" type="button" id="warp_save">ذخیره تنظیمات WARP</button>
-        </div>
-        <div class="row" style="margin-top:10px">
-          <button class="btn btn-c" type="button" id="warp_btn">ساخت حساب WARP (یک‌بار)</button>
-          <button class="btn btn-d" type="button" id="warp_del">حذف حساب</button>
-          <span class="sub" id="wstate"></span>
-        </div>
-        <div id="warpmsg" class="hint" style="margin-top:8px"></div>
-        <div id="warpinfo" class="hint"></div>
-      </div>
-      <div class="card"><h3>🎯 کدام سایت‌ها از WARP می‌روند؟</h3>
-        <p class="hint">این سرویس‌ها خودکار از خروجی تمیز می‌روند:</p>
-        <div class="chips">${SANCTIONED_DOMAINS.slice(0, 18).map((d) => '<span class="chip">' + d + "</span>").join("")}<span class="chip">و ۲۳ سرویس دیگر…</span></div>
-        <p class="hint">بقیه‌ی سایت‌ها مسیر عادی — بدون جریمه‌ی سرعت.</p>
-      </div>
-      <div class="card"><h3>🧰 اگر مشکلی پیش آمد</h3>
-        <p class="hint">سایتی باز نشد؟ «حذف حساب» و بعد «ساخت حساب WARP» را بزنید.<br>۲) می‌خواهید موقتاً خاموش شود؟ تیک «نمایش نود WARP» را بردارید و «ذخیره تنظیمات WARP» را بزنید — حساب حفظ می‌شود.<br>۳) بعد از هر تغییر، برنامه‌ی مشتری تا ۳ ساعت بعد خودش تازه می‌کند؛ برای فوری بودن، به‌روزرسانی دستی بزنید.<br>۴) <b>پشتیبانی برنامه‌ها:</b> نود WARP در Hiddify و Clash/meta و sing-box کامل کار می‌کند؛ بعضی نسخه‌های قدیمی v2rayNG نوع warp:// را نمی‌شناسند — برای آن‌ها همین اشتراک در Hiddify باز شود.</p>
-      </div>
-    </section>
-    <section class="tab" id="tab-wg">
-      <div class="card"><h3>🔗 وایرگارد <span class="sub">حساب WARP مستقل برای هر مشتری — فایل .conf یا QR</span></h3>
-        <p class="hint">ترافیک وایرگارد مستقیم می‌رود و در مصرف پنل شمرده نمی‌شود. برای اپ‌های v2ray/sing-box همان کانفیگ ☁️ WARP ساب کاربر است.</p>
-        <p class="hint">اگر «ساخت حساب» لحظه‌ای خطا داد: «ورود دستی» حسابِ آماده را می‌پذیرد.</p>
-        <p class="hint">Handshake صفر / RX صفر در اپ = مسیر UDP شما. ترتیب آزمایش: ①Endpoint «IP خام» را انتخاب و دوباره دانلود/اسکن کنید (دور از مسمومیت DNS گوشی) ②پورت جایگزین (2408→500→1701→4500→4508) ۳داده‌ی موبایل به‌جای وای‌فای. اگر هیچ‌کدام Handshake نداد، شبکه‌تان UDP خارجی را می‌بندد — وایرگارد/WARP (UDP) روی آن شبکه کار نمی‌کند؛ ساب اصلی (TCP) می‌ماند.</p>
-        <p class="hint">⚡ وایرگارد از حجمِ سابِ اصلی جداست و مصرفش هیچ پنلی زنده نمی‌بیند (مسیر مستقیم UDP) — پس از مشتری هم پرسیده نمی‌شود؛ بجایش «📅 روز» بده: هرچقدر بخواهد مصرف می‌کند و روزش که رسید، دسترسی‌اش خودکار قطع می‌شود. «⛔ قطع کامل» حساب را همان لحظه سمت سرور حذف می‌کند — برگشت فقط با «ساخت دوباره» و کانفیگ نو.</p>
-        <div class="row" style="margin-top:6px"><label class="check"><input type="checkbox" id="wg_rsv"> خط Reserved در فایل (برای NekoBox/Hiddify — اپ رسمی وایرگارد این خط را رد می‌کند)</label></div>
-        <p class="hint">⚡ tx=0 در اپ رسمی وایرگارد طبیعی است: سرور WARP به Reserved (۳ بایتِ client_id) نیاز دارد که اپ رسمی نمی‌فرستد. WARP را از ساب (Hiddify/NekoBox/Streisand — با Reserved) استفاده کنید یا این‌جا فایلِ Reserved-دار بگیرید؛ Endpointهای 500/1701/4500/4508 را هم برای شبکه‌های حساس امتحان کنید.</p>
-        <div class="row" style="margin-top:8px"><span class="sub">Endpoint دانلود/QR:</span><select id="wg_ep" style="background:var(--inp);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px 10px"><option value="">engage.cloudflareclient.com:2408 (پیش‌فرض رسمی)</option><option value="ip:2408">162.159.192.1:2408 — IP خام (توصیه‌ی اول)</option><option value="engage:4508">engage:4508</option><option value="engage:500">engage:500</option><option value="engage:1701">engage:1701</option><option value="engage:4500">engage:4500</option></select></div>
-        <div class="row" style="margin-top:12px"><button class="btn btn-b btn-sm" id="wg_refresh" type="button">↻ به‌روزرسانی</button><span class="sub" id="wgmsg"></span></div>
-        <div id="wglist" style="margin-top:8px"></div>
-      </div>
-    </section>
-
+        
     <section class="tab" id="tab-backup">
       <div class="card"><h3>💾 بکاپ و بازیابی <span class="sub">همه‌ی پنل در یک فایل</span></h3>
         <p class="hint">یک فایل با همه‌چیز: کاربران، مصرف، تنظیمات و توکن‌ها — برای بازگردانی دقیق.</p>
@@ -9394,81 +9325,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
     function busy(on,msg){var b=$("busy");$("busyt").textContent=msg||"در حال انجام…";b.classList.toggle("on",!!on)}
 
     // ---------- وایرگارد (۲۳۸) ----------
-    async function loadWg(){
-      var m=$("wgmsg"); if(m)m.textContent="در حال خواندن…";
-      try{
-        var d=await api(P+"/api/wg/list");
-        $("wglist").innerHTML=(d.list||[]).map(function(u){
-          var acts;
-          if(u.has){
-            var dayTxt=u.cut?'<span class="sub" style="color:var(--bad)">⛔ قطع‌شده</span>':(!u.expireAt?'<span class="sub" style="color:var(--ok)">✅ فعال</span><span class="sub">روز: بی‌نهایت</span>':(u.expireAt<=Date.now()?'<span class="sub" style="color:var(--bad)">⛔ منقضی — قطع می‌شود</span>':'<span class="sub" style="color:var(--ok)">✅ فعال</span><span class="sub">⏳ '+Math.max(0,Math.ceil((u.expireAt-Date.now())/86400000))+' روز مانده</span>'));
-            acts=dayTxt
-              +'<span class="sub">'+new Date(u.created).toLocaleDateString("fa-IR")+(u.manual?" · دستی":"")+'</span>'
-              +'<button class="btn btn-b btn-sm" data-wgdl="'+u.id+'" type="button">دانلود .conf</button>'
-              +'<button class="btn btn-d btn-sm" data-wgqr="'+u.id+'" type="button">QR</button>'
-              +'<button class="btn btn-b btn-sm" data-wgdays="'+u.id+'" type="button">📅 روز</button>'
-              +(u.cut?'<button class="btn btn-g btn-sm" data-wgnew="'+u.id+'" type="button">ساخت دوباره</button>':'<button class="btn btn-d btn-sm" data-wgcut="'+u.id+'" type="button">⛔ قطع کامل</button>')
-              +'<button class="btn btn-d btn-sm" data-wgdel="'+u.id+'" type="button">حذف</button>';
-          } else acts='<button class="btn btn-g btn-sm" data-wgnew="'+u.id+'" type="button">ساخت حساب</button><button class="btn btn-b btn-sm" data-wgman="'+u.id+'" type="button">ورود دستی</button>';
-          return '<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:9px 0"><b>'+esc2(u.name)+'</b><span class="actions">'+acts+'</span></div>';
-        }).join("") || '<p class="hint">هنوز کاربری نیست.</p>';
-        if(m)m.textContent="";
-      }catch(e){ if(m)m.textContent=e.message||"خطا"; }
-    }
-    if($("nt_wg"))$("nt_wg").addEventListener("click",loadWg);
-    if($("wg_refresh"))$("wg_refresh").onclick=loadWg;
-    if($("wglist"))$("wglist").onclick=async function(ev){
-      var b=ev.target.closest("button"); if(!b)return;
-      try{
-        if(b.dataset.wgnew){ busy(true,"ساخت حساب وایرگارد…"); await api(P+"/api/wg/new",{method:"POST",body:JSON.stringify({uid:b.dataset.wgnew})}); busy(false); toast("حساب وایرگارد ساخته شد"); loadWg(); }
-        else if(b.dataset.wgman){
-          var pv=prompt("PrivateKey حساب وایرگارد (۴۴ نویسه — از wgcf یا هر سازنده‌ی حساب):"); if(pv===null)return; pv=pv.trim();
-          var a4=prompt("آدرس Interface (مثال: 172.16.0.2/32):"); if(a4===null)return; a4=a4.trim();
-          var a6=prompt("آدرس IPv6 (اختیاری — رد شدن: Enter):"); if(a6===null)return; a6=a6.trim();
-          if(!pv||!a4){toast("PrivateKey و آدرس v4 الزامی است",true);return;}
-          busy(true,"ذخیره‌ی حساب دستی…"); await api(P+"/api/wg/manual",{method:"POST",body:JSON.stringify({uid:b.dataset.wgman,priv:pv,v4:a4,v6:a6})}); busy(false); toast("حساب دستی ذخیره شد ✓"); loadWg();
-        }
-        else if(b.dataset.wgdl){
-          var epSel=$("wg_ep"); var epq=(epSel&&epSel.value?("&ep="+encodeURIComponent(epSel.value)):"")+($("wg_rsv")&&$("wg_rsv").checked?"&rsv=1":""); /* ⚡ ۲۵۹ */
-          var r=await fetch(P+"/api/wg/conf?uid="+encodeURIComponent(b.dataset.wgdl)+epq,{headers:hdr()});
-          if(!r.ok)throw new Error("HTTP "+r.status);
-          var txt=await r.text();
-          var bl=new Blob([txt],{type:"application/octet-stream"});
-          var a=document.createElement("a"); a.href=URL.createObjectURL(bl); a.download="pasargad-wg.conf";
-          document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(a.href)},4000);
-        }
-        else if(b.dataset.wgqr){
-          var row=b.closest(".row");
-          var img=row.parentNode.querySelector(":scope > img");
-          if(img&&img.style.display!=="none"){img.style.display="none";}
-          else{
-            var epSel2=$("wg_ep"); var epq2=(epSel2&&epSel2.value?("&ep="+encodeURIComponent(epSel2.value)):"")+($("wg_rsv")&&$("wg_rsv").checked?"&rsv=1":""); /* ⚡ ۲۵۹ */
-            var r2=await fetch(P+"/api/wg/qr?uid="+encodeURIComponent(b.dataset.wgqr)+epq2,{headers:hdr()});
-            if(!r2.ok)throw new Error("HTTP "+r2.status);
-            if(!img){ img=document.createElement("img"); img.alt="QR"; img.style.maxWidth="230px"; img.style.display="block"; img.style.margin="10px auto"; row.after(img); }
-            img.src=URL.createObjectURL(await r2.blob()); img.style.display="block";
-          }
-        }
-        else if(b.dataset.wgcut){
-          if(!confirm("«قطع کامل»: حساب وایرگاردِ این مشتری سمت سرور حذف می‌شود — کانفیگ فعلی‌اش برای همیشه از کار می‌افتد و باید کانفیگ نو بگیرد. مطمئنی؟"))return;
-          busy(true,"در حال قطع سمت سرور…");
-          var rc=await api(P+"/api/wg/cut",{method:"POST",body:JSON.stringify({uid:b.dataset.wgcut})});
-          busy(false);
-          toast(rc.server===false?"حساب دستی بود — صدور conf/QR قطع شد؛ اگر قبلاً ایمپورت کرده باشد، فقط ساخت کلید نو جلویش را می‌گیرد":"قطع کامل شد — حساب سمت سرور حذف شد");
-          loadWg();
-        }
-        else if(b.dataset.wgdays){
-          var ds=prompt("چند روز دسترسی وایرگارد این مشتری باشد؟ (۰ یا خالی = بی‌نهایت — هرچقدر بخواهد مصرف می‌کند، روز که رسید خودکار قطع می‌شود)"); if(ds===null)return;
-          busy(true,"در حال ثبت روز…");
-          var rd=await api(P+"/api/wg/days",{method:"POST",body:JSON.stringify({uid:b.dataset.wgdays,days:Number(ds)||0})});
-          busy(false);
-          toast(rd.expireAt?"ثبت شد — در روز مقرر خودکار قطع می‌شود":"ثبت شد — بی‌نهایت");
-          loadWg();
-        }
-        else if(b.dataset.wgdel){ await api(P+"/api/wg?uid="+encodeURIComponent(b.dataset.wgdel),{method:"DELETE"}); toast("حذف شد"); loadWg(); }
-      }catch(e){ busy(false); toast(e.message||"خطا",true); }
-    };
-
     // ---------- منو و تب‌ها ----------
     var drawer=$("drawer"),scrim=$("scrim");
     function closeDrawer(){drawer.classList.remove("open");scrim.classList.remove("on")}
@@ -9481,7 +9337,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
       try{location.hash=name}catch(e){}
     }
     document.querySelectorAll(".dnav button").forEach(function(b){b.onclick=function(){showTab(b.getAttribute("data-tab"))}});
-    (function(){var h=(location.hash||"").replace("#","");showTab(["home","users","radar","settings","tg","warp","backup"].indexOf(h)>=0?h:"home")})();
+    (function(){var h=(location.hash||"").replace("#","");showTab(["home","users","radar","settings","tg","backup"].indexOf(h)>=0?h:"home")})(); /* ⚡ ۳۰۱: warp/wg حذف */
     (function(){var b2=$("themeBtn2");if(b2)b2.onclick=function(){var cur=document.documentElement.getAttribute("data-theme");var nt=cur==="day"?"night":"day";document.documentElement.setAttribute("data-theme",nt);try{localStorage.setItem("pg_theme",nt)}catch(e){}}})();
 
     // ---------- رندرها ----------
@@ -9547,7 +9403,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
           var lim=Number(u.limit)||0;
           return "<tr><td>"+esc2(u.name)+"</td>"+
           '<td><input id="lim_'+u.id+'" type="number" min="0" max="100" value="'+lim+'" style="width:86px;background:var(--inp);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:7px 9px"></td>'+
-          "<td>"+(lim>0?(function(){var w=ST.settings.warpOn===true?1:0;var dv=ST.settings.altPorts===true?Math.min(4,Math.max(0,lim-(1+w))):0;return (u.poolCount+1+w+dv)+" از "+lim+" کانفیگ ("+u.poolCount+" اسکن + "+dv+" پورت + "+(1+w)+" ثابت)"+(u.poolCount===0?' <span class="sub" style="color:var(--bad)">استخر خالی — از تب «کشف IP» اسکن بزن</span>':'');})():(function(){var dv=ST.settings.altPorts===true?4:0;return "همه ("+(healthy+1+dv)+")";})())+"</td>"+
+          "<td>"+(lim>0?(function(){var w=0; /* ⚡ ۳۰۱: WARP حذف */var dv=ST.settings.altPorts===true?Math.min(4,Math.max(0,lim-(1+w))):0;return (u.poolCount+1+w+dv)+" از "+lim+" کانفیگ ("+u.poolCount+" اسکن + "+dv+" پورت + "+(1+w)+" ثابت)"+(u.poolCount===0?' <span class="sub" style="color:var(--bad)">استخر خالی — از تب «کشف IP» اسکن بزن</span>':'');})():(function(){var dv=ST.settings.altPorts===true?4:0;return "همه ("+(healthy+1+dv)+")";})())+"</td>"+
           '<td><button class="btn btn-g btn-sm" data-lim="'+u.id+'">ذخیره</button></td></tr>';
         }).join("")||'<tr><td colspan="4" style="color:var(--mu)">کاربری نیست — اول کاربر بسازید</td></tr>')+"</tbody></table>";
     }
@@ -9795,16 +9651,11 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
       var s=ST.settings;
       $("sn").value=s.subName||"Pasargad";$("fp").value=s.fingerprint||"chrome";$("wp").value=s.path||"/?ed=2560";
       $("eh").value=s.extraHosts||"";$("dns").value=s.dnsIp||"1.1.1.1"; /* ⚡ ۲۳۴: فیلدهای پوشش SNI حذف شدند */$("px").value=String(s.proxyIPs||"").split(/[\\n,;]+/).map(function(x){return x.trim()}).filter(Boolean).join("\\n"); /* ⚡ پچ 2.4.6: هر فرمت قدیمی → خط‌به‌خط */
-      // ⚡ 2.2.6: وضعیت واقعی حساب WARP — دیگر «ساخته شد» ادبی نیست
-      var we=$("wstate");if(we)we.textContent=s.warpSet?"حساب WARP: سالم ✓ (در sing-box / Clash / Xray به ساب می‌رود)":"حساب WARP ذخیره نشده ✗ — «ساخت حساب WARP» را بزنید";
       $("isppool").value=s.ispPoolApi||"";$("ispsmart").checked=!!s.ispSmart;
-      $("ci").value=s.cleanIps||"";$("mh").value=s.mirrorHosts||"";$("frp").value=s.fragPreset||"std";$("xh_on").checked=!!s.xhttpOn;$("xh_path").value=s.xhttpPath||"/xhttp";$("fr").checked=!!s.fragment;$("ir").checked=s.directIran!==false;$("ad").checked=!!s.blockAds;
+      $("ci").value=s.cleanIps||"";updCi();$("mh").value=s.mirrorHosts||"";$("frp").value=s.fragPreset||"std";$("xh_on").checked=!!s.xhttpOn;$("xh_path").value=s.xhttpPath||"/xhttp";$("fr").checked=!!s.fragment;$("ir").checked=s.directIran!==false;$("ad").checked=!!s.blockAds;
       var ap=$("ap_on");if(ap)ap.checked=s.altPorts===true;
       // ⚡ 2.1.10: تلگرام/WARP/بکاپ — توکن فقط ۴ رقم آخر (خالی = بدون تغییر)
       var tl=$("tgt_l");if(tl)tl.textContent=s.tgBotTokenSet?("Bot Token (ذخیره: …"+(s.tgBotTokenLast4||"")+" — خالی بگذارید = بدون تغییر)"):"Bot Token";
-      var wOn=$("warp_on"),wBtn=$("warp_btn");
-      if(wOn){wOn.checked=s.warpOn===true;wOn.disabled=!s.warpSet;if(!s.warpSet)wOn.parentElement.style.opacity=".5"}
-      if(wBtn&&s.warpSet)wBtn.textContent="ساخت حساب جدید";
       // ⚡ 2.2.1: هشدارهای قابل‌تنظیم + جعبه‌ی قدم‌ها + فیلدهای ذخیره‌شده (خالی نشان دادن = پاک‌شدن هنگام ذخیره!)
       var tgc=$("tgc");if(tgc)tgc.value=s.tgChatId||"";
       var tgon=$("tg_on");if(tgon)tgon.checked=s.tgOn===true;
@@ -9812,8 +9663,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
       var te=$("tg_exp");if(te)te.value=(s.tgExpDays||"");
       var tr=$("tg_req");if(tr)tr.value=(s.tgReq||"");
       var tv=$("tg_vol");if(tv)tv.value=(s.tgVolMB||""); /* ⚡ ۲۵۹ */
-      var tw259=$("tgwarp");if(tw259)tw259.checked=s.tgViaWarp===true; /* ⚡ ۲۵۹ */
-      renderTgSteps();renderWarpSteps();renderBkSteps();
+      renderTgSteps();renderBkSteps();
     }
     // ⚡ 2.2.1: جعبه‌ی قدم‌ها — قدم انجام‌شده جمع می‌شود؛ همه که شد، فقط یک خط «آماده»
     function stepBox(items){
@@ -9836,16 +9686,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         {done:!!(s.tgChatId&&String(s.tgChatId).trim()),t:"گرفتن Chat ID و ذخیره‌ی آن",d:"حالا در تلگرام به ربات خودتان بنویسید /id — عددی که می‌دهد را در کادر «Chat ID» بگذارید و «ذخیره کنید»."},
         {done:tst,t:"پیام آزمایشی",d:"«ارسال پیام آزمایشی» را بزنید؛ اگر در تلگرام پیام رسید، همه‌چیز آماده است."}
       ]);
-    }
-    function renderWarpSteps(){
-      var el=$("warpsteps");if(!el)return;
-      var s=ST.settings;
-      el.innerHTML=stepBox([
-        {done:!!s.warpSet,t:"ساخت حساب WARP",d:"دکمه‌ی «ساخت حساب WARP» را بزنید — چند ثانیه بیشتر طول نمی‌کشد."},
-        {done:s.warpOn===true,t:"نمایش در اشتراک‌ها",d:"تیک «نمایش نود WARP» را بزنید و «ذخیره تنظیمات WARP» را فشار دهید؛ نود «☁️ WARP» به همه‌ی اشتراک‌ها اضافه می‌شود."}
-      ]);
-      var wi=$("warpinfo");
-      if(wi)wi.textContent=s.warpSet?("وضعیت: حساب فعال ✅"+(s.warpCid4?" — شناسه: …"+s.warpCid4:"")+(s.warpDate?" — ساخته‌شده: "+new Date(s.warpDate).toLocaleDateString("fa-IR"):"")):"";
     }
     function renderBkSteps(){
       var el=$("bksteps");if(!el)return;
@@ -10026,7 +9866,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
     };
     // ---------- ⚡ 2.1.10: تلگرام / WARP / بکاپ ----------
     function tgBody(){
-      var b={tgOn:$("tg_on").checked,tgChatId:$("tgc").value.trim(),tgPct:Math.min(100,Math.max(10,+$("tg_pct").value||80)),tgExpDays:Math.max(0,Math.round(+$("tg_exp").value)||0),tgReq:Math.max(0,Math.round(+$("tg_req").value)||0),tgVolMB:Math.max(0,Math.round(+$("tg_vol").value)||0),tgViaWarp:$("tgwarp").checked,directIran:ST.settings.directIran!==false}; /* ⚡ ۲۵۹ */
+      var b={tgOn:$("tg_on").checked,tgChatId:$("tgc").value.trim(),tgPct:Math.min(100,Math.max(10,+$("tg_pct").value||80)),tgExpDays:Math.max(0,Math.round(+$("tg_exp").value)||0),tgReq:Math.max(0,Math.round(+$("tg_req").value)||0),tgVolMB:Math.max(0,Math.round(+$("tg_vol").value)||0),directIran:ST.settings.directIran!==false}; /* ⚡ ۲۵۹ */
       if($("tgt").value.trim())b.tgBotToken=$("tgt").value.trim();
       return b;
     }
@@ -10066,32 +9906,13 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         $("tgmsg").textContent="وب‌هوک متصل شد ✅"+(d.info&&d.info.lastError?" (هشدار تلگرام: "+d.info.lastError+")":" حالا در تلگرام به ربات /id بفرستید.");
       }catch(e){busy(false);toast(e.message,true)}
     };
-    $("warp_btn").onclick=async function(){
-      busy(true,"ساخت حساب WARP (چند ثانیه)…");
-      try{
-        var d=await api(P+"/api/warp",{method:"POST",body:JSON.stringify({on:$("warp_on").checked})});
-        busy(false);await refresh();fillSettings();
-        $("warpmsg").textContent="حساب WARP ساخته شد ✅ نود «☁️ WARP» به ساب‌ها اضافه شد.";
-        toast("WARP آماده شد");
-      }catch(e){busy(false);$("warpmsg").textContent="";toast(e.message,true)}
-    };
-    // ⚡ 2.2.3: تیک به‌تنهایی اعمال نمی‌شود — با دکمه‌ی ذخیره (خواست کاربر) تا وضعیت همیشه روشن باشد
-    $("warp_save").onclick=async function(){
-      busy(true,"در حال ذخیره‌ی تنظیمات WARP…");
-      try{
-        await api(P+"/api/settings",{method:"POST",body:JSON.stringify({warpOn:$("warp_on").checked,directIran:ST.settings.directIran!==false})});
-        busy(false);await refresh();fillSettings();
-        toast($("warp_on").checked?"ذخیره شد ✅ نود WARP در اشتراک‌ها قرار گرفت":"ذخیره شد ✅ نود WARP از اشتراک‌ها برداشته شد");
-      }catch(e){busy(false);toast(e.message,true)}
-    };
-    $("warp_del").onclick=async function(){
-      if(!confirm("حساب WARP حذف شود؟ نود از ساب‌ها برداشته می‌شود."))return;
-      busy(true,"در حال حذف…");
-      try{
-        await api(P+"/api/warp",{method:"DELETE"});
-        busy(false);await refresh();fillSettings();$("warpmsg").textContent="";toast("حساب WARP حذف شد");
-      }catch(e){busy(false);toast(e.message,true)}
-    };
+    /* ⚡ ۳۰۱ (3.0.1): شمارندهٔ IP + ذخیرهٔ همه + کاندیدِ گیت‌هاب + بررسیِ دستی‌ها */
+    function updCi(){try{var v=$("ci").value.split(/[\\s,;]+/).filter(function(x){return x.trim()}).length;var n=(ST&&ST.settings&&Array.isArray(ST.settings.nodes))?ST.settings.nodes.length:0;var el=$("cicount");if(el)el.textContent="📡 "+v+" دستی · 🛰️ "+n+" اسکن‌شده = مجموع "+(v+n)+" IP";}catch(e){}}
+    $("ci").addEventListener("input",updCi);
+    $("saveall").onclick=async function(){busy(true,"در حال ذخیرهٔ همهٔ تنظیمات…");try{var b={subName:$("sn").value,fingerprint:$("fp").value,path:$("wp").value,extraHosts:$("eh").value,proxyIPs:$("px").value,ispPoolApi:$("isppool").value,ispSmart:$("ispsmart").checked,dnsIp:$("dns").value,cleanIps:$("ci").value,mirrorHosts:$("mh").value,fragPreset:$("frp").value,xhttpOn:$("xh_on").checked,xhttpPath:$("xh_path").value,fragment:$("fr").checked,directIran:$("ir").checked,blockAds:$("ad").checked,altPorts:$("ap_on")?$("ap_on").checked:false,autoCheck:$("ac_on").checked,autoCheckMin:Number($("ac_min").value)||300};var d=await api(P+"/api/settings",{method:"POST",body:JSON.stringify(b)});if(!d.ok)throw new Error(d.error||"خطا");toast("همهٔ تنظیمات ذخیره شد ✅");await refresh();fillSettings();}catch(e){toast(e.message||"خطا",true)}finally{busy(false)}};
+    $("hvs").onclick=async function(){busy(true,"استخراج از منابع گیت‌هاب…");try{var d=await api(P+"/api/clean-harvest",{method:"POST",body:"{}"});if(!d.ok)throw new Error(d.error||"خطا");window.__hv=d.ips||[];toast(d.count+" کاندید از گیت‌هاب آمد ✅ حالا «شروع رادار» را بزن تا از شبکهٔ خودت تأیید شوند");}catch(e){toast(e.message||"خطا",true)}finally{busy(false)}};
+    $("cichk").onclick=async function(){var lines=$("ci").value.split(/[\\s,;]+/).filter(Boolean);if(!lines.length){toast("اول IP بگذار",true);return}busy(true,"بررسی از مرورگر شما…");var res=$("cires");if(res)res.textContent="در حال بررسی "+lines.length+" IP…";var live=[],dead=[];function p1(ip,port){return new Promise(function(rs){var t0=Date.now(),dn=false,im=new Image();var to=setTimeout(function(){if(!dn){dn=true;rs(null)}},2500);im.onload=function(){if(!dn){dn=true;clearTimeout(to);rs(Date.now()-t0)}};im.onerror=function(){var dt=Date.now()-t0;if(!dn){dn=true;clearTimeout(to);rs(dt>=60?Math.max(1,Math.round(dt)):null)}};im.referrerPolicy="no-referrer";var h6=/:/.test(ip)&&ip.charAt(0)!=="["?"["+ip+"]":ip;im.src="https://"+h6+(Number(port)===443?"":":"+port)+"/cdn-cgi/trace?_="+Math.random()})}for(var i=0;i<lines.length;i++){var m=/^(\\d{1,3}(?:\\.\\d{1,3}){3})(?::(\\d{1,5}))?$/.exec(lines[i].trim());if(!m){dead.push(lines[i].trim()+" (فرمت غلط)");continue}var port=Number(m[2])||443;var ms=await p1(m[1],port);if(ms)live.push(lines[i].trim());else dead.push(lines[i].trim())}$("ci").value=live.join("\\n");updCi();if(res)res.textContent="✅ سالم: "+live.length+" — 🗑️ حذف: "+dead.length+(dead.length?" ("+dead.join("، ")+")":"")+" — حالا «💾 ذخیرهٔ همهٔ تنظیمات» را بزن.";busy(false)};
+    var isc=$("ispcand");if(isc)isc.addEventListener("change",function(){if(this.value&&this.value!=="__custom"){$("isppool").value=this.value;toast("منبع انتخاب شد — «💾 ذخیرهٔ همهٔ تنظیمات» را بزن")}});
     $("backup_dl").onclick=async function(){
       busy(true,"در حال آماده‌سازی بکاپ…");
       try{
@@ -10264,7 +10085,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
       var box=$("portbox");if(!box)return;
       box.innerHTML=ALL_PORTS.map(function(p){
         var tls=TLS_PORTS.indexOf(p)>=0;
-        return '<label class="pchip '+(tls?"tls":"")+(p===443?" on":"")+'"><input type="checkbox" name="scanport" value="'+p+'" '+((p===443||p===2053)?"checked":"")+">"+p+(tls?" 🔒":"")+"</label>";
+        return '<label class="pchip '+(tls?"tls":"")+((p===443||p===2053)?" on":"")+'"><input type="checkbox" name="scanport" value="'+p+'" '+((p===443||p===2053)?"checked":"")+">"+p+(tls?" 🔒":"")+"</label>";
       }).join("");
       box.addEventListener("change",function(){
         box.querySelectorAll(".pchip").forEach(function(lb){
