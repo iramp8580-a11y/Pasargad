@@ -853,6 +853,20 @@ import { connect } from "cloudflare:sockets";
  *       (tlsBogus فقط ۴۴۳ بود) + مقصد غیر-CF در موج اول تنها می‌دود (مسابقه‌ی ناعادلانه ممنوع).
  *       ۲۵۹d-فیکس۲: گامِ ثابتِ i+=WAVE با موجِ اولِ تک‌تایی، hosts[1..2] را برای همیشه قورت می‌داد
  *       (پرشِ اثبات‌شده) → برشِ موج به waveSlices (خالص/گیت‌پذیر) منتقل شد؛ گام = طولِ موجِ مصرفی.
+ *  ۳۰۲) 3.0.2 «درسِ بلو‌نایت» (بازگشتِ کاربر با ۴ ایراد — همه با کالبد، نه ادعا):
+ *       باگ۱-واپسین: ①api/settings فقط ۱۲ IP دستی نگه می‌داشت (اثبات: ۲۰ می‌رفت، ۱۲ می‌ماند)
+ *       ← سقف ۱۰۰. ②سلولِ سهمیه در کاربرانِ بی‌سهمیه فقط نودهای اسکن را می‌شمرد (۷۰۱: «۵ از ۲۰»)
+ *       ← سلول = configCount سرور (منبعِ یگانه‌ی حقیقت). ③ترتیبِ ساب: IPهای دستی بعد از استخر
+ *       بودند و با سهمیه‌ی پر، هیچ‌وقت نمی‌رسیدند ← دستی/آینه بلافاصله بعد از کانفیگ اصلی.
+ *       درسِ BlueKnight (worker-standalone — کالبدِ کامل در know §۳۰۴): کانفیگ‌هایش «همه
+ *       دامنه‌محور»اند (address=دامنه‌ی ورکر) ← پینگِ اپ به DNSِ اپراتور می‌رسد نه به IP خامِ
+ *       شاید-دروپ‌شده ← ما هم «🌐 دامنه» را همیشه بعد از اصلی گذاشتیم (۴ سازنده). موتورش
+ *       NAT64 را روی ۶ پیشوند به‌موازات مسابقه می‌دهد ← ما ۴ پیشوند را در زنجیره‌ی رله
+ *       اضافه کردیم. Fronting-SNI را عمداً نگرفتیم (اثباتِ زنده‌ی موج۱۷: alert-40). زنجیره‌ی
+ *       HTTP/SOCKS5 خروجی نیاز به VPS خود کاربر دارد — با ProxyIP پوشش داده شده؛ ثبت شد.
+ *       + «گیت‌هاب» گزینه‌ی «منبع کاندید» شد (دکمه‌ی جدا حذف) + «ذخیرهٔ همه» به پایانِ تب فنی
+ *       رفت (دو دکمه‌ی ذخیره‌ی قبلی حذف — یک دکمه، آخرِ صفحه) + متن‌های توضیحی از تب‌های کاری
+ *       به تبِ نوِ «📖 توضیحات» (منوی سه‌خط) منتقل شد.
  *  ۳۰۱) 3.0.1 «گزارشِ میدان» (سه باگ + چهار خواسته؛ موتورِ اتصال دست‌نخورده — هشِ core با 2.7.6 یکسان):
  *       باگ۱ سهمیه: سقفِ سختِ تعداد در هر سه قالبِ ساب — ریشه: شمارشِ ناقصِ استخر (ویژه‌ها/آینه‌ها/فرگمنت
  *       بیرونِ حساب بودند) ← سقف روی خروجیِ نهایی حکم می‌کند. باگ۲ شمارنده: IPهای دستی «۰» نشان داده
@@ -998,7 +1012,7 @@ import { connect } from "cloudflare:sockets";
  *  ۲۵۹) WG: Reserved اختیاری در conf (ریشه‌ی tx=0 اپ رسمی) · ProxyIP-check: ۸→۵ · تلگرام پیش‌فرض از مسیر اصلی
  *       (ریشه‌ی «تلگرام بالا نمی‌آید») با کلید tgViaWarp · هشدار حجم کل پنل (tgVolMB — مگابایت، یک‌بار در هر آستانه).
  */
-const VERSION = "3.0.1";
+const VERSION = "3.0.2";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WS_READY = 1;
 const DAY_MS = 86400000;
@@ -5096,7 +5110,7 @@ async function panelRouter(request, env, url, panel) {
       // ⚡ 2.2.8: پورت‌های TLS اضافه
       altPorts: body.altPorts != null ? !!body.altPorts : state.settings.altPorts === true,
       /* ⚡ ۲۹۰ (2.7.7): IP تمیزِ دستی + دامنه‌های آینه (خود-ترمیم) + پیش‌فرضِ فرگمنت + XHTTP */
-      cleanIps: body.cleanIps != null ? String(body.cleanIps || "").split(/[\s,;]+/).map((s) => s.trim()).filter((s) => { const m = /^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/.exec(s); if (!m) return false; if (m[1].split(".").some((o) => Number(o) > 255)) return false; /* ⚡ ۲۹۱ فیکسِ B3: اکتتِ >۲۵۵ ممنوع (اثبات: ۹۹۹.۹۹۹… در لینک می‌نشست) */ const pp = Number(m[2] || 443); return pp >= 1 && pp <= 65535; }).slice(0, 12).join("\n") : String(pv.cleanIps || ""),
+      cleanIps: body.cleanIps != null ? String(body.cleanIps || "").split(/[\s,;]+/).map((s) => s.trim()).filter((s) => { const m = /^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/.exec(s); if (!m) return false; if (m[1].split(".").some((o) => Number(o) > 255)) return false; /* ⚡ ۲۹۱ فیکسِ B3: اکتتِ >۲۵۵ ممنوع (اثبات: ۹۹۹.۹۹۹… در لینک می‌نشست) */ const pp = Number(m[2] || 443); return pp >= 1 && pp <= 65535; }).slice(0, 100).join("\n") : String(pv.cleanIps || ""),
       mirrorHosts: body.mirrorHosts != null ? String(body.mirrorHosts || "").split(/[\s,;]+/).map((s) => s.trim()).filter((s) => /^[A-Za-z0-9.-]{3,80}$/.test(s)).slice(0, 4).join("\n") : String(pv.mirrorHosts || ""),
       fragPreset: body.fragPreset != null ? (["std", "p11", "both"].includes(String(body.fragPreset)) ? String(body.fragPreset) : String(pv.fragPreset || "std")) : String(pv.fragPreset || "std"),
       xhttpOn: body.xhttpOn != null ? !!body.xhttpOn : state.settings.xhttpOn === true,
@@ -6087,7 +6101,7 @@ function variantPortsFor(limit, settings) {
   /* ⚡ 2.5.4 ریشه‌ی سرریز سهمیه: دامنه‌های وصل‌شده (extras) جزو ثابت‌ها رزرو نمی‌شدند —
      با WARP+پورت‌ها+دامنه، جمع کانفیگ‌های ساب از عددِ سهمیه رد می‌شد (اثبات عددی: limit=3 → ۴).
      حالا extras هم جزو ثابت‌ها است؛ سهمیه = کل کانفیگ‌های ساب، بدون هیچ استثنایی. */
-  const fixed = 1 + boundExtraHosts(settings).length + premiumConfigs(settings, "").filter((c) => !c.frag && c.type !== "xhttp").length; /* ⚡ ۳۰۱: WARP حذف؛ ویژه‌ها شمرده می‌شوند */
+  const fixed = 2 + boundExtraHosts(settings).length + premiumConfigs(settings, "").filter((c) => !c.frag && c.type !== "xhttp").length; /* ⚡ ۳۰۱ حذف وارپ + ۳۰۴: +۱ دامنه */
   const room = limit > 0 ? Math.max(0, limit - fixed) : CF_TLS_PORTS.length;
   return CF_TLS_PORTS.slice(0, room);
 }
@@ -6107,7 +6121,7 @@ function dedupeNodes(list) {
 }
 // ⚡ 2.2.7: سهمیه = «تعداد کل کانفیگ ساب» — کانفیگ اصلی ورکر (+WARP اگر فعال + واریانت‌های
 // پورت دامنه) جزو عدد شما شمرده می‌شوند؛ هیچ عدد پنهانی وجود ندارد
-function subExtras(settings) { return 1 + boundExtraHosts(settings).length + premiumConfigs(settings, "").filter((c) => !c.frag && c.type !== "xhttp").length; } /* ⚡ 2.5.4 + ۳۰۱: دامنه‌های وصل و ویژه‌ها هم «ثابت» شمرده می‌شوند؛ WARP حذف */
+function subExtras(settings) { return 1 + 1 + boundExtraHosts(settings).length + premiumConfigs(settings, "").filter((c) => !c.frag && c.type !== "xhttp").length; } /* ⚡ ۳۰۴: +۱ = کانفیگِ دامنه‌محورِ همیشگی */ /* ⚡ 2.5.4 + ۳۰۱: دامنه‌های وصل و ویژه‌ها هم «ثابت» شمرده می‌شوند؛ WARP حذف */
 function poolTargetFor(state, u) {
   const fixed = subExtras(state.settings) + variantPortsFor(userLimit(u), state.settings).length;
   return Math.max(0, userLimit(u) - fixed);
@@ -6507,12 +6521,12 @@ function userConfigCount(user, settings) {
   // ⚡ 2.2.5 + ۳۰۱: سهمیه‌ی سخت — شمارش هم‌قانون با سقفِ سختِ ساختن‌ها (WARP حذف)
   if (user && userLimit(user) > 0) {
     const variants = variantPortsFor(userLimit(user), settings).length;
-    const poolRoom = Math.max(0, userLimit(user) - 1 - extras - variants - premiumR);
+    const poolRoom = Math.max(0, userLimit(user) - 2 - extras - variants - premiumR);
     const poolLen = Math.min(Array.isArray(user.pool) ? user.pool.length : 0, poolRoom);
-    return Math.min(userLimit(user), poolLen + 1 + variants + extras + premiumA);
+    return Math.min(userLimit(user), poolLen + 2 + variants + extras + premiumA);
   }
   const nodes = Array.isArray(settings.nodes) && settings.nodes.length ? settings.nodes : parseNodes(settings.extraIPs);
-  return nodes.length + 1 + (altPortsOn(settings) ? CF_TLS_PORTS.length : 0) + extras + premiumA; // +۱ = کانفیگ اصلی خود ورکر
+  return nodes.length + 2 + (altPortsOn(settings) ? CF_TLS_PORTS.length : 0) + extras + premiumA; // +۲ = اصلی + دامنه‌محور (۳۰۴)
 }
 
 // ⚡ وضعیت دقیق کاربر برای صفحه‌ی وضعیت اشتراک
@@ -6798,7 +6812,7 @@ function extraAddresses(settings, host, user) {
   if (user && userLimit(user) > 0) {
     const lim = userLimit(user);
     const variants = domainVariants(host, settings, lim);
-    const poolRoom = Math.max(0, lim - 1 - extras.length - variants.length - premiumConfigs(settings, host).filter((c) => !c.frag && c.type !== "xhttp").length); /* ⚡ ۳۰۱: فقط ویژه‌های همه‌جا-رندر در اندازه‌ی استخر؛ فرگمنت/XHTTP فقط در vless می‌آیند و سقفِ سخت حکم می‌کند */ /* ⚡ ۳۰۱: WARP حذف؛ ویژه‌ها شمرده می‌شوند */
+    const poolRoom = Math.max(0, lim - 2 - extras.length - variants.length - premiumConfigs(settings, host).filter((c) => !c.frag && c.type !== "xhttp").length); /* ⚡ ۳۰۴: −۲ = اصلی + دامنه */ /* ⚡ ۳۰۱: فقط ویژه‌های همه‌جا-رندر در اندازه‌ی استخر؛ فرگمنت/XHTTP فقط در vless می‌آیند و سقفِ سخت حکم می‌کند */ /* ⚡ ۳۰۱: WARP حذف؛ ویژه‌ها شمرده می‌شوند */
     nodes = dedupeNodes([...variants, ...(Array.isArray(user.pool) ? user.pool : []).slice(0, poolRoom)]);
   } else nodes = dedupeNodes([...domainVariants(host, settings, 0), ...nodes]);
   return { hosts, nodes, extras };
@@ -6862,7 +6876,7 @@ function xrayJson(user, host, settings) {
   /* ⚡ ۲۷۰ (هم‌قانون با base64): لبه=IPِ خام + Host=دامنه؛ ترتیبِ لبه‌اول؛ اصلی لبه‌محور */
   const nodesOrdered = nodes.slice().sort((a, b) => (isCfEdgeIp(b.ip) ? 1 : 0) - (isCfEdgeIp(a.ip) ? 1 : 0));
   const mainEdge = nodesOrdered.find((n) => isCfEdgeIp(n.ip) && Number(n.port || 443) === 443) || nodesOrdered.find((n) => isCfEdgeIp(n.ip) && isTlsPort(n.port || 443));
-  let addrs = [{ tag: pxLabelFor /* ⚡ ۳۰۱ */(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))];
+  let addrs = [{ tag: pxLabelFor(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, { tag: "🌐 دامنه", server: host, port: 443, hip: host }, ...premiumConfigs(settings, host).filter((c) => !c.frag && c.type !== "xhttp").map((c) => ({ tag: c.name, server: c.addr, port: c.port, hip: c.addr })), ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))]; /* ⚡ ۳۰۴: دامنه + دستی/آینه بعد از اصلی */
   const tagU = userTag(user); // ⚡ 2.3.2
   const limZ = userLimit(user); /* ⚡ ۳۰۱ (باگ ۱): سقفِ سخت */
   if (limZ) addrs = addrs.slice(0, Math.max(1, limZ - (frag ? 1 : 0))); /* فرگمنت هم داخل سقف */
@@ -7000,6 +7014,22 @@ function buildVlessLinks(user, host, settings) {
   links.push(
     `vless://${user.id}@${mainAddr}:${mainPort}?encryption=none&security=tls&sni=${sni}&fp=${fp}&type=ws&host=${hostH}&path=${mkPath({ ip: host, port: 443 })}#${encodeURIComponent(mainName)}`
   );
+  /* ⚡ ۳۰۴ (درسِ BlueKnight): کانفیگِ دامنه‌محورِ خودِ ورکر — درخواستِ اپ به DNS اپراتور می‌رود
+     (نزدیک‌ترین لبه) و DPI یک SNI مشروع می‌بیند؛ وقتی IP خامِ لبه دروپ می‌شود (همه‌چیز -1)،
+     این همان چیزی است که کار می‌ماند. بلافاصله بعد از اصلی — همیشه داخل سقفِ سهمیه. */
+  links.push(
+    `vless://${user.id}@${hostH}:443?encryption=none&security=tls&sni=${sni}&fp=${fp}&type=ws&host=${hostH}&path=${mkPath({ ip: host, port: 443 })}#${encodeURIComponent("🌐 دامنه")}`
+  );
+  for (const c0 of premiumConfigs(settings, host)) { /* ⚡ ۳۰۴: 📡 دستی و 🪞 آینه قبل از استخر — با سهمیه‌ی پر هم «اعمال» می‌شوند */
+    if (c0.frag || c0.type === "xhttp") continue;
+    if (limV && links.length >= limV) break;
+    if (c0.frag) continue;
+    const pm0 = mkPath({ ip: c0.addr, port: c0.port });
+    const host0 = c0.host || hostH;
+    links.push(
+      `vless://${user.id}@${c0.addr}:${c0.port}?encryption=none&security=tls&sni=${c0.sni || sni}&fp=${fp}&type=ws&host=${host0}&path=${pm0}#${encodeURIComponent(c0.name)}`
+    );
+  }
   for (const eh of extras) { /* ⚡ 2.5.3: کانفیگ گذر از دامنه‌ی وصل‌شده به ورکر (فقط دامنه‌ی وصل — کانفیگ مرده ممنوع) */
     if (limV && links.length >= limV) break; /* ⚡ ۳۰۱ */
     links.push(
@@ -7038,6 +7068,7 @@ function buildVlessLinks(user, host, settings) {
   /* ⚡ ۲۹۰ (2.7.7): کانفیگ‌های ویژه — فرگمنتِ واقعی (پارامترِ fragment= — قبلاً فقط اسم بود)، 📡 تمیزِ دستی، 🪞 آینه، ⚡·X (XHTTP) */
   for (const c of premiumConfigs(settings, host)) {
     if (limV && links.length >= limV) break; /* ⚡ ۳۰۱ */
+    if (!c.frag && c.type !== "xhttp") continue; /* ⚡ ۳۰۴: دستی/آینه بالا رندر شدند — دو-بار ممنوع */
     try {
       const cHost = c.host || hostH;
       const cSni = c.sni || sni;
@@ -7103,15 +7134,15 @@ function clashYaml(user, host, settings) {
   const nodesOrdered = nodes.slice().sort((a, b) => (isCfEdgeIp(b.ip) ? 1 : 0) - (isCfEdgeIp(a.ip) ? 1 : 0));
   const mainEdge = nodesOrdered.find((n) => isCfEdgeIp(n.ip) && Number(n.port || 443) === 443) || nodesOrdered.find((n) => isCfEdgeIp(n.ip) && isTlsPort(n.port || 443));
   add(pxLabelFor(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", mainEdge ? mainEdge.ip : host, mainEdge ? (mainEdge.port || 443) : 443, host); /* ⚡ 2.5.2: نام از خروجی واقعی */
+  add("🌐 دامنه", host, 443, host); /* ⚡ ۳۰۴ (درسِ BlueKnight): همیشه یک دامنه‌محور */
+  for (const c0 of premiumConfigs(settings, host)) { /* ⚡ ۳۰۴: دستی/آینه قبل از استخر */
+    if (limY && names.length >= limY) break;
+    if (c0.frag || c0.type === "xhttp") continue;
+    add(c0.name, c0.addr, c0.port, c0.addr, c0.host ? { sni: c0.sni, host: c0.host } : null);
+  }
   for (const eh of extras) add("🌐 " + eh, eh, 443, eh); /* ⚡ 2.5.3: دامنه‌ی وصل‌شده = کانفیگ مستقل */
   const uniqNames = uniqueNodeNames(nodes, settings);
   for (const n of nodesOrdered) add(uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), isCfEdgeIp(n.ip) ? n.ip : host, n.port, n.ip); /* ⚡ ۲۷۰: لبه=IPِ خام؛ خصوصی=دامنه؛ هش ProxyIP روی IP واقعی */
-  /* ⚡ ۲۹۰ (2.7.7): 📡 تمیزِ دستی + 🪞 آینه در clash (ws-محور؛ xhttp/frag فرمتِ clash ندارد — صادقانه) */
-  for (const c of premiumConfigs(settings, host)) {
-    if (limY && names.length >= limY) break; /* ⚡ ۳۰۱ */
-    if (c.type === "xhttp" || c.frag) continue;
-    add(c.name, c.addr, c.port, c.addr, c.host ? { sni: c.sni, host: c.host } : null); /* ⚡ ۲۹۱ فیکسِ B2 */
-  }
   const coreNames = names.slice(); // ⚡ 2.2.8: فقط نودهای واقعی (بدون WARP) برای گروه‌های خودکار
   const rules = [];
   if (settings.directIran) rules.push("  - GEOSITE,ir,DIRECT", "  - GEOIP,IR,DIRECT", "  - DOMAIN-SUFFIX,ir,DIRECT");
@@ -7194,7 +7225,7 @@ function singboxJson(user, host, settings) {
   /* ⚡ ۲۷۰ (هم‌قانون با base64): لبه=IPِ خام + Host=دامنه؛ ترتیبِ لبه‌اول؛ اصلی لبه‌محور */
   const nodesOrdered = nodes.slice().sort((a, b) => (isCfEdgeIp(b.ip) ? 1 : 0) - (isCfEdgeIp(a.ip) ? 1 : 0));
   const mainEdge = nodesOrdered.find((n) => isCfEdgeIp(n.ip) && Number(n.port || 443) === 443) || nodesOrdered.find((n) => isCfEdgeIp(n.ip) && isTlsPort(n.port || 443));
-  let addrs = [{ tag: pxLabelFor /* ⚡ ۳۰۱ */(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))];
+  let addrs = [{ tag: pxLabelFor(proxyIpForNode({ ip: host, port: 443 }, settings), settings) || "⚡ پاسارگاد", server: mainEdge ? mainEdge.ip : host, port: mainEdge ? (mainEdge.port || 443) : 443, hip: host }, { tag: "🌐 دامنه", server: host, port: 443, hip: host }, ...premiumConfigs(settings, host).filter((c) => !c.frag && c.type !== "xhttp").map((c) => ({ tag: c.name, server: c.addr, port: c.port, hip: c.addr })), ...extras.map((eh) => ({ tag: "🌐 " + eh, server: eh, port: 443, hip: eh })), ...nodesOrdered.map((n) => ({ tag: uniqNames.get(n.ip + ":" + (n.port || 443)) || nodeLabel(n), server: isCfEdgeIp(n.ip) ? n.ip : host, port: n.port || 443, hip: n.ip }))]; /* ⚡ ۳۰۴: دامنه + دستی/آینه بعد از اصلی */
   const tagU = userTag(user); // ⚡ 2.3.2
   const limZ = userLimit(user); /* ⚡ ۳۰۱ (باگ ۱): سقفِ سخت */
   if (limZ) addrs = addrs.slice(0, limZ);
@@ -7210,17 +7241,6 @@ function singboxJson(user, host, settings) {
     transport: { type: "ws", path: buildWsPath(path, proxyIpForNode({ ip: a.hip || a.server, port: a.port }, settings), tagU), headers: { Host: hosts[0] } }, /* ⚡ 2.5.2: هش روی IP واقعی؛ ⚡ 2.5.3: Host = دامنه‌ی خود ورکر */
     packet_encoding: "xudp",
   }));
-  /* ⚡ ۲۹۰ (2.7.7): 📡 تمیزِ دستی + 🪞 آینه در sing-box (همان قراردادِ ws) */
-  for (const c of premiumConfigs(settings, host)) {
-    if (limZ && outbounds.length >= limZ) break; /* ⚡ ۳۰۱ */
-    if (c.type === "xhttp" || c.frag) continue;
-    outbounds.push({
-      type: "vless", tag: c.name, server: c.addr, server_port: c.port, uuid: user.id,
-      tls: c.tls ? { enabled: true, server_name: c.sni || sni, utls: { enabled: true, fingerprint: fp } } : { enabled: false },
-      transport: { type: "ws", path: buildWsPath(path, proxyIpForNode({ ip: c.addr, port: c.port }, settings), tagU), headers: { Host: c.host || hosts[0] } },
-      packet_encoding: "xudp",
-    });
-  }
   const tags = outbounds.map((o) => o.tag);
   const rules = [];
   if (settings.directIran) rules.push({ geosite: "ir", outbound: "direct" }, { geoip: "ir", outbound: "direct" });
@@ -7528,11 +7548,23 @@ async function handleVlessSession(ws, env, earlyData, ctx, pathPx, _pathTag) {
   try { ws.addEventListener("error", wsCleanup); } catch {}
 }
 
-function ipv4ToNat64(ip) {
+function ipv4ToNat64(ip, prefix) {
   const o = String(ip || "").split(".").map((x) => Number(x));
   if (o.length !== 4 || o.some((n) => !Number.isFinite(n) || n < 0 || n > 255)) return null;
   const h = (n) => n.toString(16).padStart(2, "0");
-  return "2602:fc59:b0:64::" + h(o[0]) + h(o[1]) + ":" + h(o[2]) + h(o[3]);
+  return String(prefix || "2602:fc59:b0:64::") + h(o[0]) + h(o[1]) + ":" + h(o[2]) + h(o[3]);
+}
+/* ⚡ ۳۰۴ (درسِ BlueKnight): بلو‌نایت مقصد را روی ۶ پیشوندِ NAT64 به‌موازات مسابقه می‌دهد؛
+   ما همان ایده را در زنجیره‌ی رله پیاده می‌کنیم — ۴ پیشوندِ معتبرِ عمومی، پشتِ هم (اگر
+   گیت‌وی اول زنده نبود، بعدی امتحان می‌شود؛ هر تلاش سقفِ openِ ۳.۵s خودش را دارد). */
+const NAT64_PREFIXES = ["2602:fc59:b0:64::", "2602:fc59:11:64::", "2a01:4f9:c010:3f02:64::"]; /* ⚡ ۳۰۴: ۳ پیشوند — زنجیره باندشده بماند */
+function nat64Variants(ip) {
+  const out = [];
+  for (const pre of NAT64_PREFIXES) {
+    const v = ipv4ToNat64(ip, pre);
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
 }
 // ⚡ 2.3.2 (خالص/تست‌پذیر): استخراج ProxyIP و تگ کاربر از path اتصال — دو الگو
 function parsePathProxy(pathname, search) {
@@ -7574,13 +7606,17 @@ function connectOrder(hosts, pathPx, cfFirst) {
   }
   return [head, px, ...tail];
 }
-function connectHosts(address, pathPx, proxyIps, n64, maxProxy) {
-  /* ⚡ ۲۷۹: عینِ 2.3.5 — ترتیب: مقصد → path → NAT64 → تا ۸ رله‌ی یکتا (شافل در connectSmart)؛
-     بدونِ فیلتر — لیستِ پشتیبان همان خانواده‌ی میدان-اثبات‌شده‌ی 2.3.5 است. */
+function connectHosts(address, pathPx, proxyIps, n64, maxProxy, n64Extra) {
+  /* ⚡ ۲۷۹: عینِ 2.3.5 — ترتیب: مقصد → path → NAT64 (اصلی + ⚡۳۰۴: واریانت‌های پیشوند) → تا ۸ رله‌ی یکتا */
   const cap = Math.max(1, Math.min(16, Math.floor(Number(maxProxy) || 8)));
   const hosts = [address];
   if (pathPx && isProxySpec(pathPx) && pathPx.trim() !== String(address)) hosts.push(pathPx.trim());
   if (n64) hosts.push(n64);
+  for (const nv of n64Extra || []) {
+    if (hosts.length >= 8) break; /* سقفِ کلِ زنجیره‌ی ثابت */
+    const k = String(nv).toLowerCase();
+    if (nv && !hosts.some((h) => String(h).toLowerCase() === k)) hosts.push(nv);
+  }
   const fixed = hosts.length;
   const seen = new Set(hosts.map((h) => String(h).toLowerCase()));
   for (const p of proxyIps || []) {
@@ -7817,7 +7853,7 @@ function connectSmart(address, port, leftover, proxyIps, pathPx, env) {
     [proxies[i], proxies[j]] = [proxies[j], proxies[i]];
   }
   const n64 = ipv4ToNat64(address);
-  const hosts = connectHosts(address, pathPx, proxies, n64);
+  const hosts = connectHosts(address, pathPx, proxies, n64, 8, nat64Variants(address)); /* ⚡ ۳۰۴: چند-پیشوندی */
   return (async () => {
     for (const hostname of hosts) {
       let sock = null;
@@ -8530,7 +8566,7 @@ const FALLBACK_PROXYIPS = [
   "193.233.233.188:2053",
   "180.149.44.124:8443"
 ];
-try { globalThis.__pxDebug = { parsePathProxy, connectHosts, connectOrder, waveSlices, isProxySpec, parseNodes, dohUpstream, variantPortsFor, boundExtraHosts, routeGet, routeSet, tlsBogus, buildVlessLinks, relayGarbageHttp, pipeRemoteToWs, wgConfText, parseProxyIPs, proxyIpForNode, proxyPool, splitHostSpec, FALLBACK_PROXYIPS, lookupCountryBatch, geoHeal, quotaText, planNodeRoom, planCandidates, pruneAgedPending, nodeLabel, countryStats, uniqueNodeNames, connectSmart, isCfEdgeIp, sampleV6, pxProbeCH, probeForward, forwardProbeRun, liveAccAdd, liveAccRemove, liveAccSum, liveAccReset, addUsage, readUsage, premiumConfigs, handleXhttp, fetchIspIps }; } catch {} // ⚡ پچ 2.3.6 // ⚡ 2.3.4 (بعد از تعریف const — ضد TDZ)
+try { globalThis.__pxDebug = { parsePathProxy, connectHosts, connectOrder, waveSlices, isProxySpec, parseNodes, dohUpstream, variantPortsFor, boundExtraHosts, routeGet, routeSet, tlsBogus, buildVlessLinks, relayGarbageHttp, pipeRemoteToWs, wgConfText, parseProxyIPs, proxyIpForNode, proxyPool, splitHostSpec, FALLBACK_PROXYIPS, lookupCountryBatch, geoHeal, quotaText, planNodeRoom, planCandidates, pruneAgedPending, nodeLabel, countryStats, uniqueNodeNames, connectSmart, isCfEdgeIp, sampleV6, pxProbeCH, probeForward, forwardProbeRun, liveAccAdd, liveAccRemove, liveAccSum, liveAccReset, addUsage, readUsage, premiumConfigs, handleXhttp, fetchIspIps, nat64Variants }; } catch {} // ⚡ پچ 2.3.6 // ⚡ 2.3.4 (بعد از تعریف const — ضد TDZ)
 const proxyIpCache = { at: 0, ips: [] };
 async function fetchProxyIpList() {
   if (proxyIpCache.at && Date.now() - proxyIpCache.at < 600000) return proxyIpCache.ips;
@@ -9082,6 +9118,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         <button data-tab="adv">🧪 فنی</button>
         <button data-tab="tg">🤖 ربات تلگرام</button>
         <button data-tab="backup">💾 بکاپ و بازیابی</button>
+        <button data-tab="docs">📖 توضیحات</button>
       </nav>
       <div style="margin-top:18px;display:flex;flex-direction:column;gap:8px">
         <button class="btn btn-d btn-sm" id="themeBtn2">🌙 / ☀️ تم شب و روز</button>
@@ -9144,7 +9181,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
       <div class="card">
         <div class="radar"><div class="ring" id="ring"></div>
         <div style="flex:1"><h3 style="margin:0 0 6px">📡 رادار IP تمیز — چندپورته</h3>
-        <p class="sub">تأیید از <b>مرورگر شما</b> انجام می‌شود (همان شبکه‌ای که واقعاً استفاده می‌کنید — TLS کامل + trace). ⚡ فقط IPهای داخل رنج رسمی کلادفلر «نود» می‌شوند (تنها لبه‌ی CF مسیر Host→ورکر را دارد — ریشه‌ی تایم‌اوتِ اسکن‌ها همین بود)؛ بقیه‌ی زنده‌ها خودکار «رله» شمرده می‌شوند و به استخر ProxyIP می‌روند. هر آی‌پی سالم = یک کانفیگ مستقل.</p>
         <div class="sub" id="netinfo" style="margin-top:4px"></div>
         <div class="sub" id="envinfo" style="margin-top:2px;opacity:.75"></div></div></div>
         <div style="margin-top:14px"><label>پورت‌های اسکن (همه TLS امن 🔒)</label>
@@ -9156,16 +9192,15 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
             <option value="official">رنج‌های رسمی (یک IP از هر /۲۴)</option>
             <option value="proxyip">رله‌ها (→ استخر ProxyIP — نود نمی‌سازد)</option>
             <option value="random">تصادفی لبه</option>
+            <option value="github">گیت‌هاب: cf-clean-ips (سروری، هر ۳ ساعت)</option>
           </select></div>
           <div class="fg"><label>تعداد تست کل (۴۰-۳۰۰)</label><input id="sc" type="number" min="40" max="300" value="150"></div>
           <div class="fg"><label>بهترین‌ها (۱۰-۴۰)</label><input id="sk" type="number" min="10" max="40" value="30"></div>
-          <button class="btn btn-c" id="srun" type="button">شروع رادار (تأیید از مرورگر شما)</button>
-          <button class="btn" id="hvs" type="button">🌐 کاندید از گیت‌هاب (سروری)</button>
+          <button class="btn btn-c" id="srun" type="button">شروع رادار</button>
         </div>
         <div class="bar" id="sbar"><i id="sbarf"></i></div>
         <div class="sub" id="smsg" style="min-height:18px;margin-top:6px"></div>
         <div id="sres"></div>
-        <p class="hint">هر کاندید با <b>۳ تلاش TLS از مرورگر شما</b> سنجیده می‌شود: پینگ (میانگین)، جیتر (نوسان) و لاس (درصد شکست) — امتیاز: <b>ms + جیتر/۲ + ۲۰×لاس</b>. نکته‌ی فنی: مرورگر برای IP خام گواهی معتبر نمی‌گیرد؛ «زنده» یعنی handshake کامل به سرور رسیده (خطای سریع گواهی) و «مرده» یعنی بی‌پاسخ تا تایم‌اوت. نودهای تأییدشده قبلی موقع اسکن‌های بعدی حذف نمی‌شوند؛ پورت‌های HTTP ناامن پیش‌فرض نیستند.</p>
       </div>
       <div class="card"><h3>✅ IPهای سالم اسکن‌شده <span class="sub">هر ردیف یک کانفیگ در اشتراک کاربران است</span></h3>
         <div id="nodetable"></div>
@@ -9190,12 +9225,10 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         <div class="row" style="margin-top:12px">
           <label class="check"><input type="checkbox" id="ir"> ایران مستقیم</label>
           <label class="check"><input type="checkbox" id="ad"> مسدود تبلیغات</label>
-          <button class="btn btn-g" type="button" id="savebtn">ذخیره تنظیمات</button>
         </div>
       </div>
       <div class="card"><h3>🔑 رمز مدیر</h3>
-        <p class="hint">حداقل ۸ نویسه؛ فقط روی سرور ذخیره می‌شود.</p>
-        <div class="row">
+                <div class="row">
           <div class="fg"><label>نام کاربری (اختیاری)</label><input id="pwu" autocomplete="username"></div>
           <div class="fg"><label>رمز فعلی</label><input id="pwo" type="password" autocomplete="current-password"></div>
           <div class="fg"><label>رمز جدید</label><input id="pwn" type="password" autocomplete="new-password"></div>
@@ -9218,7 +9251,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         <div class="row" style="margin-top:12px">
           <label class="check"><input type="checkbox" id="fr"> فرگمنت</label>
           <label class="check"><input type="checkbox" id="ap_on"> پورت‌های اضافه (2053/2083/2087/2096)</label>
-          <button class="btn btn-g" type="button" id="saveall" style="background:var(--gold2)">💾 ذخیرهٔ همهٔ تنظیمات</button> <button class="btn btn-g" type="button" id="savebtn2">ذخیره تنظیمات فنی</button>
           <button class="btn btn-c" type="button" id="hcheck">🔍 بررسی دامنه‌ها (از کلادفلر رد می‌شود؟)</button>
         </div>
         <div id="hres" style="margin-top:8px"></div>
@@ -9227,9 +9259,9 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         <p class="hint"><b>این چه کاری می‌کند؟</b> هر خط یک IP سالم لبه است. ⚡ وقتی این لیست پر باشد، هر کانفیگ ساب یک ProxyIP اختصاصیِ خودش را در مسیر (path) می‌برد — سایت‌هایی که سخت‌گیرانه میزبان‌شان را می‌بندند (مثل هوش مصنوعی‌ها) برای همه‌ی برنامه‌ها حتی V2Box/v2rayNG هم باز می‌شوند؛ عوض‌کردن لیست، پس از به‌روزرسانی ساب اعمال می‌شود و لیست پنل هم همیشه به‌عنوان پشتیبانِ فوری امتحان می‌شود. اگر مسیر مستقیم قطع شود، اتصال خودکار از این IPها رد می‌شود. لازم نیست دستی بنویسید — دکمه‌ی «پیشنهاد خودکار» بهترین‌ها را پیدا و اضافه می‌کند.</p>
         <div class="fg" style="margin-top:8px"><label>لیست ProxyIP (هر خط یکی)</label><textarea id="px" class="ltr" placeholder="104.16.132.229"></textarea></div>
         <div class="fg" style="margin-top:8px"><label>IPهای تمیزِ دستی (هر خط یکی — IP یا IP:پورت) ⚡۲۹۰</label><textarea id="ci" class="ltr" placeholder="104.17.147.22:443"></textarea><p class="hint">این‌ها به‌عنوان کانفیگِ 📡 به ساب اضافه می‌شوند — برای اپراتورهایی که IPهای فعلی را اذیت می‌کنند.</p></div>
-        <div class="fg"><label>منابعِ کاندید (ایرانی — کلیک = پر شدن خودکار)</label><select id="ispcand"><option value="">— انتخاب کن —</option><option value="https://raw.githubusercontent.com/vAHiD55555/cf-clean-ips/main">همگانی: cf-clean-ips (GitHub — هر ۳ ساعت آپدیت)</option><option value="__custom">کاستوم (آدرسِ خودم)</option></select><p class="hint">⚡۳۰۱: per-ISP واقعی به مخزنی نیاز دارد که فایل‌های mci/mtn/rightel/… بدهد؛ «همگانی» برای همهٔ اپراتورها همان لیستِ به‌روز را می‌دهد (ترتیبِ خواندن: مخزن/key.txt سپس ir/all/ip.txt).</p></div>
-        <div class="fg"><div id="cicount" class="hint" style="color:var(--gold2)">—</div><p class="hint">⚡۳۰۱: شمارنده حالا IPهای دستی را هم حساب می‌کند (باگ ۲).</p></div>
-        <div class="fg"><button class="btn btn-c" type="button" id="cichk">🔍 بررسی IPهای دستی (از مرورگر شما)</button><div id="cires" class="hint" style="margin-top:6px"></div><p class="hint">سالم می‌ماند؛ خراب/قطع خودکار پاک می‌شود — بعدش «💾 ذخیرهٔ همهٔ تنظیمات» را بزن. تأیید از مرورگرِ شماست (همان شبکهٔ مشتری‌ها — ورکر اجازه‌ی TCP به لبه ندارد).</p></div>
+        <div class="fg"><label>منابعِ کاندید (ایرانی — کلیک = پر شدن خودکار)</label><select id="ispcand"><option value="">— انتخاب کن —</option><option value="https://raw.githubusercontent.com/vAHiD55555/cf-clean-ips/main">همگانی: cf-clean-ips (GitHub — هر ۳ ساعت آپدیت)</option><option value="__custom">کاستوم (آدرسِ خودم)</option></select></div>
+        <div class="fg"><div id="cicount" class="hint" style="color:var(--gold2)">—</div></div>
+        <div class="fg"><button class="btn btn-c" type="button" id="cichk">🔍 بررسی IPهای دستی</button><div id="cires" class="hint" style="margin-top:6px"></div></div>
         <div class="fg" style="margin-top:8px"><label>دامنه‌های آینه — خود-ترمیم (هر خط یکی) ⚡۲۹۰</label><textarea id="mh" class="ltr" placeholder="panel2.workers.dev"></textarea><p class="hint">اگر روزی اکانتِ اصلی بن شد، مشتری روی کانفیگِ 🪞 می‌ماند (شرط: کاربر با همان UUID در پنلِ دوم هم ثبت شده باشد). لینکِ ساب عوض نمی‌شود!</p></div>
         <div class="fg"><label>پیش‌فرضِ فرگمنت</label><select id="frp"><option value="std">tlshello (استاندارد)</option><option value="p11">۱-۱ (ISPهای سخت‌گیر)</option><option value="both">هر دو (توصیه)</option></select><p class="hint">اکتبر۲۰۲۶: tlshello روی بعضی اپراتورهای ایران مرده — گزینه‌ی ۱-۱ را هم در ساب بگذار.</p></div>
         <label class="check"><input type="checkbox" id="xh_on"> ترنسپورتِ XHTTP (کانفیگِ ⚡·X در ساب — کنارِ WSِ فعلی)</label>
@@ -9245,6 +9277,52 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
           <button class="btn btn-d" type="button" id="pxtest">بررسی پاسخ‌گویی ۴۴۳</button>
         </div>
         <div id="pxres" style="margin-top:10px"></div>
+      </div>
+    </section>
+
+      <div class="card" style="text-align:center">
+        <button class="btn btn-g" type="button" id="saveall" style="background:var(--gold2);min-width:280px;padding:12px">💾 ذخیرهٔ همهٔ تنظیمات</button>
+      </div>
+    <section class="tab" id="tab-docs">
+      <div class="card"><h3>📖 توضیحات — همه‌چیز درباره‌ی پنل</h3>
+        <details open><summary><b>🚀 شروع سریع</b></summary><ul class="hint" style="line-height:2">
+          <li>تب «کاربران» → مشتری بساز → لینک اشتراک را بده. هر IP سالم = یک کانفیگ مستقل برای همه‌ی کاربران.</li>
+          <li>هر تغییری در تب «فنی» فقط با دکمه‌ی «💾 ذخیرهٔ همهٔ تنظیمات» در <b>پایین همان تب</b> اعمال می‌شود.</li>
+        </ul></details>
+        <details><summary><b>👥 کاربران و سهمیه</b></summary><ul class="hint" style="line-height:2">
+          <li>ستون «کانفیگ» = شمارشِ دقیقِ سرور؛ همان عددی که واقعاً در ساب کاربر می‌آید (اصلی + دامنه + اسکن‌شده + دستی + آینه + پورت‌ها).</li>
+          <li>سهمیه‌ی هر کاربر «سقفِ سخت» است: مثلاً ۵ یعنی دقیقاً ۵ کانفیگ در هر اپ و هر فرمتی.</li>
+          <li>اگر مجموع سهمیه‌ها از IPهای سالم بیشتر باشد، IPها بین کاربران مشترک می‌شود.</li>
+          <li>در هر دوره‌ی «بررسی خودکار» اول IPها چک می‌شوند، بعد کانفیگ‌های قطع‌شده از استخر کاربران پاک و جای آن‌ها IP سالم می‌نشیند.</li>
+        </ul></details>
+        <details><summary><b>📡 کشف IP (رادار)</b></summary><ul class="hint" style="line-height:2">
+          <li>تأیید از مرورگر شما انجام می‌شود — همان شبکه‌ای که واقعاً استفاده می‌کنید. سرور خودش نمی‌تواند به لبه‌ی خودش TCP بزند.</li>
+          <li>فقط IPهای داخل رنج رسمی کلادفلر «نود» می‌شوند؛ بقیه‌ی زنده‌ها «رله» شمرده می‌شوند و به استخر ProxyIP می‌روند.</li>
+          <li>هر کاندید با ۳ تلاش TLS سنجیده می‌شود: پینگ (میانگین)، جیتر، لاس — امتیاز = ms + جیتر/۲ + ۲۰×لاس.</li>
+          <li>«منبع کاندید → گیت‌هاب»: سرور از مخزنِ ایرانیِ به‌روز (cf-clean-ips — هر ۳ ساعت) کاندید می‌گیرد؛ این مسیر به worker.devِ فیلتر ربطی ندارد؛ تأیید نهایی همچنان از مرورگر شما.</li>
+          <li>نودهای تأییدشده‌ی قبلی در اسکن‌های بعدی حذف نمی‌شوند.</li>
+        </ul></details>
+        <details><summary><b>✍️ IPهای دستی و منابع</b></summary><ul class="hint" style="line-height:2">
+          <li>فرمت: هر خط (یا ویرگول/فاصله) یکی — «IP» یا «IP:پورت». تا ۱۰۰ تا. فقط با «💾 ذخیرهٔ همهٔ تنظیمات» ذخیره می‌شود.</li>
+          <li>«🔍 بررسی IPهای دستی»: از مرورگر شما پروب می‌زند؛ سالم می‌ماند، خراب/قطع حذف می‌شود — بعدش ذخیره کنید.</li>
+          <li>در ساب، IPهای دستی و آینه‌ها <b>بلافاصله بعد از کانفیگ اصلی</b> می‌آیند — با سهمیه‌ی پر هم حتماً داخل ساب‌اند.</li>
+          <li>«مخزن اپراتور» (per-ISP): آدرسِ مخزنی که فایل‌های mci/mtn/rightel/shatel/asp/pars/tci.txt (یا ir/all/ip.txt) بدهد؛ اولین فایلِ پاسخ‌گو ملاک است.</li>
+        </ul></details>
+        <details><summary><b>🩺 چرا پینگِ کانفیگ‌ها ۱- است (عیب‌یابی)</b></summary><ul class="hint" style="line-height:2">
+          <li>۱- در اپ یعنی اتصال برقرار نشده. سه علتِ رایج: ①IP خامِ لبه روی اپراتور شما دروپ شده ②دامنه‌ی اشتراک workers.dev است که در ایران فیلتر است ③IPهای دستی/گیت‌هابی برای اپراتور شما تمیز نیستند.</li>
+          <li>از 3.0.2 هر ساب یک کانفیگِ «🌐 دامنه» دارد (درخواست با نامِ دامنه‌ی خود ورکر — مثل پنل‌های بلو‌نایت): وقتی IP خام دروپ شد، این یکی کار می‌کند.</li>
+          <li>درمانِ ریشه‌ای: <b>دامنه‌ی اختصاصی</b> در تب فنی وصل کنید + فرگمنتِ «۱-۱» + رادار را از شبکه‌ی خودتان تازه کنید.</li>
+          <li>«پینگ می‌داد ولی وصل نمی‌شد» = فیلترِ workers.dev: پینگِ TCP به لبه می‌رسد ولی Handshake با نامِ فیلترشده کامل نمی‌شود. موتور اتصال با نسخه‌ی 2.7.6 بیت‌به‌بیت یکسان است — بی‌تقصیر.</li>
+        </ul></details>
+        <details><summary><b>🤖 تلگرام</b></summary><ul class="hint" style="line-height:2">
+          <li>توکن را از @BotFather بگیرید، وب‌هوک را متصل کنید، Chat ID را با /id بگیرید و با «ذخیره» ثبت کنید. هشدار حجم/انقضا خودکار می‌آید.</li>
+        </ul></details>
+        <details><summary><b>💾 بکاپ</b></summary><ul class="hint" style="line-height:2">
+          <li>هر دو هفته یک «⬇️ دانلود بکاپ» بگیرید (شامل توکن‌هاست — جای امن). بازیابی فقط از همین پنل.</li>
+        </ul></details>
+        <details><summary><b>🗑️ WARP و وایرگارد</b></summary><ul class="hint" style="line-height:2">
+          <li>از نسخه‌ی 3.0.1 به‌کلی حذف شدند — از پنل، ساب‌ها و API. هیچ اثری از آن‌ها در خروجی نمی‌ماند.</li>
+        </ul></details>
       </div>
     </section>
 
@@ -9337,7 +9415,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
       try{location.hash=name}catch(e){}
     }
     document.querySelectorAll(".dnav button").forEach(function(b){b.onclick=function(){showTab(b.getAttribute("data-tab"))}});
-    (function(){var h=(location.hash||"").replace("#","");showTab(["home","users","radar","settings","tg","backup"].indexOf(h)>=0?h:"home")})(); /* ⚡ ۳۰۱: warp/wg حذف */
+    (function(){var h=(location.hash||"").replace("#","");showTab(["home","users","radar","settings","tg","backup","docs"].indexOf(h)>=0?h:"home")})(); /* ⚡ ۳۰۱: warp/wg حذف */
     (function(){var b2=$("themeBtn2");if(b2)b2.onclick=function(){var cur=document.documentElement.getAttribute("data-theme");var nt=cur==="day"?"night":"day";document.documentElement.setAttribute("data-theme",nt);try{localStorage.setItem("pg_theme",nt)}catch(e){}}})();
 
     // ---------- رندرها ----------
@@ -9403,7 +9481,7 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
           var lim=Number(u.limit)||0;
           return "<tr><td>"+esc2(u.name)+"</td>"+
           '<td><input id="lim_'+u.id+'" type="number" min="0" max="100" value="'+lim+'" style="width:86px;background:var(--inp);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:7px 9px"></td>'+
-          "<td>"+(lim>0?(function(){var w=0; /* ⚡ ۳۰۱: WARP حذف */var dv=ST.settings.altPorts===true?Math.min(4,Math.max(0,lim-(1+w))):0;return (u.poolCount+1+w+dv)+" از "+lim+" کانفیگ ("+u.poolCount+" اسکن + "+dv+" پورت + "+(1+w)+" ثابت)"+(u.poolCount===0?' <span class="sub" style="color:var(--bad)">استخر خالی — از تب «کشف IP» اسکن بزن</span>':'');})():(function(){var dv=ST.settings.altPorts===true?4:0;return "همه ("+(healthy+1+dv)+")";})())+"</td>"+
+          "<td>"+(lim>0?(function(){return "<b>"+(u.configCount!=null?u.configCount:"؟")+"</b> از "+lim+" کانفیگ"+(u.poolCount===0?' <span class="sub" style="color:var(--bad)">استخر خالی — از تب «کشف IP» اسکن بزن</span>':'');})():(function(){return "همه ("+(u.configCount!=null?u.configCount:"؟")+" کانفیگ)";})())+"</td>"+
           '<td><button class="btn btn-g btn-sm" data-lim="'+u.id+'">ذخیره</button></td></tr>';
         }).join("")||'<tr><td colspan="4" style="color:var(--mu)">کاربری نیست — اول کاربر بسازید</td></tr>')+"</tbody></table>";
     }
@@ -9768,8 +9846,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
         busy(false);toast(okMsg);
       }catch(e){busy(false);toast(e.message,true)}
     }
-    $("savebtn").onclick=function(){saveAll("تنظیمات ذخیره شد")};
-    $("savebtn2").onclick=function(){saveAll("تنظیمات فنی ذخیره شد")};
     $("pxsave").onclick=function(){saveAll("ProxyIPها ذخیره شد")};
     /* ⚡ 2.5.1: راستی‌آزمایی دامنه‌ها — فقط دامنه‌ای که از کلادفلر رد شود به‌عنوان میزبان کانفیگ کار می‌کند */
     $("hcheck").onclick=async function(){
@@ -9910,7 +9986,6 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
     function updCi(){try{var v=$("ci").value.split(/[\\s,;]+/).filter(function(x){return x.trim()}).length;var n=(ST&&ST.settings&&Array.isArray(ST.settings.nodes))?ST.settings.nodes.length:0;var el=$("cicount");if(el)el.textContent="📡 "+v+" دستی · 🛰️ "+n+" اسکن‌شده = مجموع "+(v+n)+" IP";}catch(e){}}
     $("ci").addEventListener("input",updCi);
     $("saveall").onclick=async function(){busy(true,"در حال ذخیرهٔ همهٔ تنظیمات…");try{var b={subName:$("sn").value,fingerprint:$("fp").value,path:$("wp").value,extraHosts:$("eh").value,proxyIPs:$("px").value,ispPoolApi:$("isppool").value,ispSmart:$("ispsmart").checked,dnsIp:$("dns").value,cleanIps:$("ci").value,mirrorHosts:$("mh").value,fragPreset:$("frp").value,xhttpOn:$("xh_on").checked,xhttpPath:$("xh_path").value,fragment:$("fr").checked,directIran:$("ir").checked,blockAds:$("ad").checked,altPorts:$("ap_on")?$("ap_on").checked:false,autoCheck:$("ac_on").checked,autoCheckMin:Number($("ac_min").value)||300};var d=await api(P+"/api/settings",{method:"POST",body:JSON.stringify(b)});if(!d.ok)throw new Error(d.error||"خطا");toast("همهٔ تنظیمات ذخیره شد ✅");await refresh();fillSettings();}catch(e){toast(e.message||"خطا",true)}finally{busy(false)}};
-    $("hvs").onclick=async function(){busy(true,"استخراج از منابع گیت‌هاب…");try{var d=await api(P+"/api/clean-harvest",{method:"POST",body:"{}"});if(!d.ok)throw new Error(d.error||"خطا");window.__hv=d.ips||[];toast(d.count+" کاندید از گیت‌هاب آمد ✅ حالا «شروع رادار» را بزن تا از شبکهٔ خودت تأیید شوند");}catch(e){toast(e.message||"خطا",true)}finally{busy(false)}};
     $("cichk").onclick=async function(){var lines=$("ci").value.split(/[\\s,;]+/).filter(Boolean);if(!lines.length){toast("اول IP بگذار",true);return}busy(true,"بررسی از مرورگر شما…");var res=$("cires");if(res)res.textContent="در حال بررسی "+lines.length+" IP…";var live=[],dead=[];function p1(ip,port){return new Promise(function(rs){var t0=Date.now(),dn=false,im=new Image();var to=setTimeout(function(){if(!dn){dn=true;rs(null)}},2500);im.onload=function(){if(!dn){dn=true;clearTimeout(to);rs(Date.now()-t0)}};im.onerror=function(){var dt=Date.now()-t0;if(!dn){dn=true;clearTimeout(to);rs(dt>=60?Math.max(1,Math.round(dt)):null)}};im.referrerPolicy="no-referrer";var h6=/:/.test(ip)&&ip.charAt(0)!=="["?"["+ip+"]":ip;im.src="https://"+h6+(Number(port)===443?"":":"+port)+"/cdn-cgi/trace?_="+Math.random()})}for(var i=0;i<lines.length;i++){var m=/^(\\d{1,3}(?:\\.\\d{1,3}){3})(?::(\\d{1,5}))?$/.exec(lines[i].trim());if(!m){dead.push(lines[i].trim()+" (فرمت غلط)");continue}var port=Number(m[2])||443;var ms=await p1(m[1],port);if(ms)live.push(lines[i].trim());else dead.push(lines[i].trim())}$("ci").value=live.join("\\n");updCi();if(res)res.textContent="✅ سالم: "+live.length+" — 🗑️ حذف: "+dead.length+(dead.length?" ("+dead.join("، ")+")":"")+" — حالا «💾 ذخیرهٔ همهٔ تنظیمات» را بزن.";busy(false)};
     var isc=$("ispcand");if(isc)isc.addEventListener("change",function(){if(this.value&&this.value!=="__custom"){$("isppool").value=this.value;toast("منبع انتخاب شد — «💾 ذخیرهٔ همهٔ تنظیمات» را بزن")}});
     $("backup_dl").onclick=async function(){
@@ -10095,6 +10170,15 @@ function dashboard(state, origin, panel, host, usageSummary, cf, warp) {
     }
     async function buildJobs(total,ports,srcSel){
       var src={ips:[],candidates:[]};
+      if(srcSel==="github"){ /* ⚡ ۳۰۴: کاندید از گیت‌هاب (سروری) — تأیید همچنان از مرورگر شما */
+        try{
+          var hg=await api(P+"/api/clean-harvest",{method:"POST",body:"{}"});
+          var gj=[];
+          (hg.ips||[]).forEach(function(x){ports.forEach(function(pp){if(Number(x.port)===pp||(!x.port&&pp===443)){var a=String(x.ip).split(":");if(a[0]&&gj.filter(function(y){return y.ip===a[0]&&y.port===pp}).length<1)gj.push({ip:a[0],port:pp})}})});
+          var guard0=0;while(gj.length<total&&guard0++<total*4){var r0=randCf(),pp0=ports[Math.floor(Math.random()*ports.length)];if(!gj.some(function(y){return y.ip===r0&&y.port===pp0}))gj.push({ip:r0,port:pp0})}
+          return gj.slice(0,total);
+        }catch(e){return []}
+      }
       try{ if(srcSel==="lists"||srcSel==="official"||srcSel==="mix"){src=await api(P+"/api/ip-sources")} }catch(e){}
       var seenJ={},offJ=[],randJ=[];
       function addJob(arr,ip,pp){ if(ip&&!seenJ[ip+":"+pp]){seenJ[ip+":"+pp]=1;arr.push({ip:ip,port:pp})} }
